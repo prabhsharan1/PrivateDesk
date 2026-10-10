@@ -93,33 +93,60 @@ def print_banner(retriever: DocumentRetriever):
         print(f"  {YELLOW}○{RESET} {DIM}Knowledge Vault is empty.{RESET}")
 
     print(f"\n{BOLD}⚡ Quick Commands:{RESET}")
-    print(f"  {YELLOW}/upload <path>{RESET}   Add PDF or PPTX (drag & drop from Finder)")
+    print(f"  {YELLOW}/upload <path>{RESET}   Index PDF, PPTX, or entire folder (drag & drop)")
     print(f"  {YELLOW}/docs{RESET}            List loaded documents & slide/page counts")
     print(f"  {YELLOW}/clear{RESET}           Purge all documents from cache")
     print(f"  {YELLOW}/help{RESET}            Show full command guide & clipboard tricks")
     print(f"  {YELLOW}/exit{RESET}            Exit PrivateDesk (or press Ctrl+D)")
-    print(f"\n{DIM}Tip: Type / and press [Tab] to auto-complete commands!{RESET}\n")
+    print(f"\n{DIM}Tip: You can drag & drop any file or folder directly into this window!{RESET}\n")
+
+
+def index_single_file(p: Path, retriever: DocumentRetriever, prefix: str = "") -> bool:
+    """Helper to parse and index a single PDF or PPTX file."""
+    filename = p.name
+    ext = p.suffix.lower()
+    if ext not in [".pdf", ".pptx"]:
+        print(f"{YELLOW}⚠️ Unsupported file type:{RESET} '{filename}'. Supported: .pdf, .pptx")
+        return False
+
+    print(f"{CYAN}⏳ {prefix}Indexing {filename}...{RESET}")
+    try:
+        pages = parse_uploaded_file(str(p), filename)
+        retriever.add_document(filename, pages)
+        doc_meta = retriever.documents.get(filename, {})
+        chunks = doc_meta.get("total_chunks", 0)
+        unit = "slides" if ext == ".pptx" else "pages"
+        print(f"{GREEN}✔ Successfully indexed:{RESET} {BOLD}{filename}{RESET} ({len(pages)} {unit}, {chunks} chunks)")
+        return True
+    except Exception as e:
+        print(f"{RED}❌ Error parsing {filename}:{RESET} {e}")
+        return False
 
 
 def handle_upload(file_input, retriever: DocumentRetriever):
-    """Processes one or more uploaded files."""
-    if isinstance(file_input, list):
-        raw_paths = file_input
-    elif isinstance(file_input, str):
-        file_input = file_input.strip()
-        if not file_input:
-            print(f"{YELLOW}Usage: /upload <path-to-pdf-or-pptx>{RESET}")
-            print(f"{DIM}Tip: You can drag and drop files from Finder directly into this window.{RESET}")
+    """Processes one or more uploaded files or entire directories."""
+    if isinstance(file_input, str):
+        # Strip extraneous /upload or /add tags if user pasted path and command together
+        clean_input = re.sub(r"(^|\s)(/upload|/add)(\s|$)", " ", file_input, flags=re.IGNORECASE).strip()
+    else:
+        clean_input = file_input
+
+    if isinstance(clean_input, list):
+        raw_paths = clean_input
+    elif isinstance(clean_input, str):
+        if not clean_input:
+            print(f"{YELLOW}Usage: /upload <path-to-file-or-folder>{RESET}")
+            print(f"{DIM}Tip: You can drag and drop files or folders directly into this window.{RESET}")
             return
         # If the entire input is already a valid path (with spaces unescaped), use it directly
-        single_candidate = clean_finder_path(file_input)
+        single_candidate = clean_finder_path(clean_input)
         if Path(single_candidate).exists():
             raw_paths = [single_candidate]
         else:
             try:
-                raw_paths = shlex.split(file_input)
+                raw_paths = shlex.split(clean_input)
             except Exception:
-                raw_paths = [file_input]
+                raw_paths = [clean_input]
     else:
         return
 
@@ -130,25 +157,31 @@ def handle_upload(file_input, retriever: DocumentRetriever):
 
         p = Path(clean_path)
         if not p.exists():
-            print(f"{RED}❌ File not found:{RESET} {clean_path}")
+            print(f"{RED}❌ Path not found:{RESET} {clean_path}")
             continue
 
-        filename = p.name
-        ext = p.suffix.lower()
-        if ext not in [".pdf", ".pptx"]:
-            print(f"{YELLOW}⚠️ Unsupported file type:{RESET} '{filename}'. Supported: .pdf, .pptx")
-            continue
+        if p.is_dir():
+            # Recursively find all supported documents (.pdf, .pptx)
+            sub_files = []
+            for item in sorted(p.rglob("*")):
+                if (item.is_file() and 
+                    item.suffix.lower() in [".pdf", ".pptx"] and 
+                    not item.name.startswith("~$") and 
+                    not item.name.startswith("._")):
+                    sub_files.append(item)
 
-        print(f"{CYAN}⏳ Indexing {filename}...{RESET}")
-        try:
-            pages = parse_uploaded_file(str(p), filename)
-            retriever.add_document(filename, pages)
-            doc_meta = retriever.documents.get(filename, {})
-            chunks = doc_meta.get("total_chunks", 0)
-            unit = "slides" if ext == ".pptx" else "pages"
-            print(f"{GREEN}✔ Successfully indexed:{RESET} {BOLD}{filename}{RESET} ({len(pages)} {unit}, {chunks} chunks)")
-        except Exception as e:
-            print(f"{RED}❌ Error parsing {filename}:{RESET} {e}")
+            if not sub_files:
+                print(f"{YELLOW}⚠️ No .pdf or .pptx files found in directory:{RESET} {p.name}")
+                continue
+
+            print(f"\n{CYAN}📁 Found {len(sub_files)} document(s) in {BOLD}{p.name}{RESET}{CYAN}. Indexing...{RESET}")
+            indexed_count = 0
+            for i, f in enumerate(sub_files, 1):
+                if index_single_file(f, retriever, prefix=f"[{i}/{len(sub_files)}] "):
+                    indexed_count += 1
+            print(f"{GREEN}🎉 Finished indexing directory:{RESET} {BOLD}{p.name}{RESET} ({indexed_count}/{len(sub_files)} indexed)\n")
+        else:
+            index_single_file(p, retriever)
 
 
 def handle_docs(retriever: DocumentRetriever):
@@ -180,12 +213,13 @@ def print_help():
     """Prints comprehensive help message."""
     print(f"\n{BOLD}PrivateDesk Command Reference:{RESET}")
     print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
-    print(f"  {YELLOW}/upload <path>{RESET}   Index PDF or PPTX files (drag & drop supported)")
+    print(f"  {YELLOW}/upload <path>{RESET}   Index PDF, PPTX, or entire folder (drag & drop supported)")
     print(f"  {YELLOW}/docs{RESET}            List all loaded documents and chunk stats")
     print(f"  {YELLOW}/clear{RESET}           Purge all loaded documents from memory and disk")
     print(f"  {YELLOW}/help{RESET}            Display this help screen")
     print(f"  {YELLOW}/exit{RESET}            Quit PrivateDesk (or press Ctrl+D)\n")
     print(f"{BOLD}💡 Shortcuts & Power Tricks:{RESET}")
+    print(f"  • {BOLD}Drag & Drop:{RESET}        Drag any file or folder directly into the prompt!")
     print(f"  • {BOLD}One-shot query:{RESET}      {CYAN}privatedesk \"What is the laptop loan policy?\"{RESET}")
     print(f"  • {BOLD}Mac Clipboard pipe:{RESET}  {CYAN}pbpaste | privatedesk{RESET}")
     print(f"  • {BOLD}Win Clipboard pipe:{RESET}  {CYAN}Get-Clipboard | privatedesk{RESET}")
@@ -246,14 +280,24 @@ def run_repl(retriever: DocumentRetriever, engine: LLMEngine):
                 handle_docs(retriever)
             elif cmd in ["/clear", "clear"]:
                 handle_clear(retriever)
-            elif cmd.startswith("/upload") or cmd.startswith("/add"):
-                parts = user_input.split(maxsplit=1)
-                file_arg = parts[1] if len(parts) > 1 else ""
+            elif "/upload" in cmd or "/add" in cmd:
+                # Handle /upload anywhere in the input (beginning, middle, or end)
+                file_arg = re.sub(r"(^|\s)(/upload|/add)(\s|$)", " ", user_input, flags=re.IGNORECASE).strip()
                 handle_upload(file_arg, retriever)
-            elif user_input.startswith("/"):
-                print(f"{YELLOW}Unknown command:{RESET} {user_input}. Type {CYAN}/help{RESET} for options.")
             else:
-                answer_query(user_input, retriever, engine)
+                # Check if user directly dragged/pasted a valid file or folder path without typing /upload
+                candidate_path = clean_finder_path(user_input)
+                if candidate_path and Path(candidate_path).exists():
+                    print(f"{CYAN}📁 Detected input path:{RESET} {candidate_path}")
+                    handle_upload(candidate_path, retriever)
+                elif user_input.startswith("/"):
+                    # Check if it looks like an intended filesystem path that couldn't be found
+                    if user_input.startswith(("/Users", "/home", "/var", "/tmp", "~", "C:", "D:")) or "/" in user_input[1:] or "\\" in user_input:
+                        print(f"{RED}❌ Path not found:{RESET} {user_input}")
+                    else:
+                        print(f"{YELLOW}Unknown command:{RESET} {user_input}. Type {CYAN}/help{RESET} for options.")
+                else:
+                    answer_query(user_input, retriever, engine)
 
         except (KeyboardInterrupt, EOFError):
             print(f"\n{DIM}Exiting PrivateDesk.{RESET}")
