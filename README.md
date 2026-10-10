@@ -241,9 +241,11 @@ In macOS Terminal, you can **drag and drop any PDF or PPTX file directly from Fi
 ### Interactive REPL Commands
 | Command | Description |
 | :--- | :--- |
-| **`/upload <path>`** or **`/add`** | Index one or more `.pdf` or `.pptx` documents (supports Finder drag-and-drop). |
+| **`/upload <path>`** or **`/add`** | Index one or more `.pdf`, `.pptx` documents, or entire folders (supports Finder drag-and-drop). |
 | **`/docs`** or **`/list`** | View all currently loaded documents, slide/page counts, and total chunks. |
-| **`/clear`** | Purge all loaded documents from memory and persistent cache (`~/.privatedesk/store.json`). |
+| **`clear`** or **`cls`** | Clear the terminal screen (leaves your vault documents intact). |
+| **`/reset`** or **`/purge`** | Purge loaded documents from cache (with safety confirmation prompt). |
+| **`/uninstall`** | Completely remove PrivateDesk, its virtual environment, and all cached data. |
 | **`/help`** | Display command reference and usage shortcuts. |
 | **`/exit`** or **`exit`** | Exit PrivateDesk (or press `Ctrl + D`). |
 
@@ -251,11 +253,42 @@ In macOS Terminal, you can **drag and drop any PDF or PPTX file directly from Fi
 | Flag | Description |
 | :--- | :--- |
 | **`privatedesk "<query>"`** | One-shot query mode. Prints response to stdout and exits. |
-| **`privatedesk --upload <files...>`** | Batch upload and index documents from command line. |
+| **`privatedesk --upload <files...>`** | Batch upload and index files or directories from command line. |
 | **`privatedesk --docs`** | Display list of indexed documents in the vault. |
-| **`privatedesk --clear`** | Wipe all indexed documents from cache. |
+| **`privatedesk --reset`** | Wipe all indexed documents from cache without interactive prompts. |
+| **`privatedesk --uninstall`** | Completely uninstall PrivateDesk and purge all local files. |
 | **`privatedesk --help`** | Display help and flag reference. |
 | **`privatedesk --version`** | Display current CLI version. |
+
+---
+
+## 🗑️ 1-Line Uninstallation
+
+Need to completely remove PrivateDesk, its virtual environment, and cached documents from your machine?
+
+### Option 1: Direct CLI Command
+```bash
+privatedesk --uninstall
+```
+*(Or type `/uninstall` inside the interactive assistant).*
+
+### Option 2: 1-Line Web Script
+
+#### macOS / Linux:
+```bash
+curl -fsSL https://raw.githubusercontent.com/prabhsharan1/PrivateDesk/main/uninstall.sh | bash
+```
+
+#### Windows (PowerShell):
+```powershell
+irm https://raw.githubusercontent.com/prabhsharan1/PrivateDesk/main/uninstall.ps1 | iex
+```
+
+### What the uninstaller cleans up:
+1. Deletes the application files and virtual environment (`~/.privatedesk`).
+2. Removes all cached document indexes and metadata (`~/.privatedesk/store.json`).
+3. Deletes global executable wrappers (`~/.local/bin/privatedesk` or `privatedesk.cmd`).
+4. Cleans up PATH entries from `~/.zshrc` / `~/.bashrc` or Windows User Environment Variables.
 
 ---
 

@@ -10,6 +10,7 @@ import os
 import re
 import shlex
 import readline
+import shutil
 from pathlib import Path
 
 from parser import parse_uploaded_file
@@ -54,6 +55,7 @@ COMMANDS = [
     "/list",
     "/reset",
     "/purge",
+    "/uninstall",
     "/help",
     "/exit",
     "clear",
@@ -237,6 +239,46 @@ def handle_purge(retriever: DocumentRetriever, force: bool = False):
     print(f"{GREEN}✔ Knowledge Vault cleared.{RESET} All documents purged from local cache.\n")
 
 
+def handle_uninstall():
+    """Uninstalls PrivateDesk and removes ~/.privatedesk, wrappers, and caches."""
+    try:
+        confirm = input(
+            f"{YELLOW}⚠️ This will completely remove PrivateDesk, its virtual environment, and cached documents.\n"
+            f"   Are you sure you want to uninstall PrivateDesk? [y/N]: {RESET}"
+        ).strip().lower()
+        if confirm not in ["y", "yes"]:
+            print(f"{DIM}Uninstallation cancelled.{RESET}\n")
+            return
+    except (KeyboardInterrupt, EOFError):
+        print(f"\n{DIM}Uninstallation cancelled.{RESET}\n")
+        return
+
+    home = Path.home()
+    
+    # 1. Remove binary wrappers
+    bin_wrapper = home / ".local" / "bin" / "privatedesk"
+    if bin_wrapper.exists():
+        bin_wrapper.unlink()
+        print(f"{GREEN}✔ Removed executable:{RESET} {bin_wrapper}")
+
+    usr_local_wrapper = Path("/usr/local/bin/privatedesk")
+    if usr_local_wrapper.exists() or usr_local_wrapper.is_symlink():
+        try:
+            usr_local_wrapper.unlink()
+            print(f"{GREEN}✔ Removed symlink:{RESET} {usr_local_wrapper}")
+        except Exception:
+            pass
+
+    # 2. Remove ~/.privatedesk directory (contains venv, app, cache)
+    privatedesk_dir = home / ".privatedesk"
+    if privatedesk_dir.exists():
+        shutil.rmtree(privatedesk_dir, ignore_errors=True)
+        print(f"{GREEN}✔ Removed application & cache:{RESET} {privatedesk_dir}")
+
+    print(f"\n{GREEN}🎉 PrivateDesk has been successfully uninstalled from your system.{RESET}\n")
+    sys.exit(0)
+
+
 def print_help():
     """Prints comprehensive help message."""
     print(f"\n{BOLD}PrivateDesk Command Reference:{RESET}")
@@ -246,6 +288,7 @@ def print_help():
     print(f"  {YELLOW}/reset{RESET}           Purge all loaded documents from memory and disk")
     print(f"  {YELLOW}clear{RESET}            Clear terminal screen (or type 'cls')")
     print(f"  {YELLOW}/help{RESET}            Display this help screen")
+    print(f"  {YELLOW}/uninstall{RESET}       Uninstall PrivateDesk and remove all data")
     print(f"  {YELLOW}/exit{RESET}            Quit PrivateDesk (or press Ctrl+D)\n")
     print(f"{BOLD}💡 Shortcuts & Power Tricks:{RESET}")
     print(f"  • {BOLD}Drag & Drop:{RESET}        Drag any file or folder directly into the prompt!")
@@ -308,6 +351,8 @@ def run_repl(retriever: DocumentRetriever, engine: LLMEngine):
                 handle_clear_screen(retriever)
             elif cmd in ["/reset", "/purge", "/clear-vault", "/clear"]:
                 handle_purge(retriever)
+            elif cmd in ["/uninstall", "uninstall"]:
+                handle_uninstall()
             elif cmd in ["/help", "help", "?"]:
                 print_help()
             elif cmd in ["/docs", "/list", "docs", "list"]:
@@ -363,6 +408,9 @@ def main():
             sys.exit(0)
         elif first_arg in ["--clear", "-c", "--reset", "-r", "--purge"]:
             handle_purge(retriever, force=True)
+            sys.exit(0)
+        elif first_arg in ["--uninstall"]:
+            handle_uninstall()
             sys.exit(0)
         elif first_arg in ["--upload", "-u"]:
             if len(sys.argv) > 2:
