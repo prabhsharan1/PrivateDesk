@@ -1,0 +1,34 @@
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Sensitive Environment & Secrets
+.env
+*.pem
+*.key
+
+# Proprietary University / Internal Training Materials
+TrainingFiles/
+*.pptx
+
+# Local Model Weights (Do not push multi-gigabyte models to Git)
+*.gguf
+*.bin
+models/
+
+# Local Uploads & Temp Data
+uploads/
+temp/
+*.log
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# OS-Specific
+.DS_Store
+Thumbs.db
