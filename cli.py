@@ -52,9 +52,11 @@ COMMANDS = [
     "/add",
     "/docs",
     "/list",
-    "/clear",
+    "/reset",
+    "/purge",
     "/help",
     "/exit",
+    "clear",
     "exit",
     "quit"
 ]
@@ -95,7 +97,8 @@ def print_banner(retriever: DocumentRetriever):
     print(f"\n{BOLD}⚡ Quick Commands:{RESET}")
     print(f"  {YELLOW}/upload <path>{RESET}   Index PDF, PPTX, or entire folder (drag & drop)")
     print(f"  {YELLOW}/docs{RESET}            List loaded documents & slide/page counts")
-    print(f"  {YELLOW}/clear{RESET}           Purge all documents from cache")
+    print(f"  {YELLOW}/reset{RESET}           Purge all loaded documents from cache")
+    print(f"  {YELLOW}clear{RESET}            Clear terminal screen")
     print(f"  {YELLOW}/help{RESET}            Show full command guide & clipboard tricks")
     print(f"  {YELLOW}/exit{RESET}            Exit PrivateDesk (or press Ctrl+D)")
     print(f"\n{DIM}Tip: You can drag & drop any file or folder directly into this window!{RESET}\n")
@@ -203,10 +206,35 @@ def handle_docs(retriever: DocumentRetriever):
     print(f"Total: {len(docs)} document(s), {len(retriever.chunks)} total chunks.\n")
 
 
-def handle_clear(retriever: DocumentRetriever):
-    """Clears all indexed documents from memory and disk."""
+def handle_clear_screen(retriever: DocumentRetriever):
+    """Clears the terminal screen and redisplays the banner."""
+    os.system("cls" if os.name == "nt" else "clear")
+    print_banner(retriever)
+
+
+def handle_purge(retriever: DocumentRetriever, force: bool = False):
+    """Safely purges all indexed documents from memory and disk cache."""
+    docs = retriever.list_documents()
+    if not docs:
+        print(f"{YELLOW}Knowledge Vault is already empty.{RESET}")
+        return
+
+    if not force:
+        try:
+            confirm = input(
+                f"{YELLOW}⚠️ Purge all {len(docs)} document(s) from your Knowledge Vault?\n"
+                f"{DIM}   (Tip: Type 'clear' if you only wanted to clear the terminal screen!){RESET}\n"
+                f"   Type 'y' to confirm purge [y/N]: "
+            ).strip().lower()
+            if confirm not in ["y", "yes"]:
+                print(f"{DIM}Purge cancelled. Your documents are safe.{RESET}\n")
+                return
+        except (KeyboardInterrupt, EOFError):
+            print(f"\n{DIM}Purge cancelled.{RESET}\n")
+            return
+
     retriever.clear_all()
-    print(f"{GREEN}✔ Knowledge Vault cleared.{RESET} All documents purged from local cache.")
+    print(f"{GREEN}✔ Knowledge Vault cleared.{RESET} All documents purged from local cache.\n")
 
 
 def print_help():
@@ -215,11 +243,13 @@ def print_help():
     print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
     print(f"  {YELLOW}/upload <path>{RESET}   Index PDF, PPTX, or entire folder (drag & drop supported)")
     print(f"  {YELLOW}/docs{RESET}            List all loaded documents and chunk stats")
-    print(f"  {YELLOW}/clear{RESET}           Purge all loaded documents from memory and disk")
+    print(f"  {YELLOW}/reset{RESET}           Purge all loaded documents from memory and disk")
+    print(f"  {YELLOW}clear{RESET}            Clear terminal screen (or type 'cls')")
     print(f"  {YELLOW}/help{RESET}            Display this help screen")
     print(f"  {YELLOW}/exit{RESET}            Quit PrivateDesk (or press Ctrl+D)\n")
     print(f"{BOLD}💡 Shortcuts & Power Tricks:{RESET}")
     print(f"  • {BOLD}Drag & Drop:{RESET}        Drag any file or folder directly into the prompt!")
+    print(f"  • {BOLD}Clear Screen:{RESET}       Type {YELLOW}clear{RESET} to wipe the terminal without touching your vault")
     print(f"  • {BOLD}One-shot query:{RESET}      {CYAN}privatedesk \"What is the laptop loan policy?\"{RESET}")
     print(f"  • {BOLD}Mac Clipboard pipe:{RESET}  {CYAN}pbpaste | privatedesk{RESET}")
     print(f"  • {BOLD}Win Clipboard pipe:{RESET}  {CYAN}Get-Clipboard | privatedesk{RESET}")
@@ -274,12 +304,14 @@ def run_repl(retriever: DocumentRetriever, engine: LLMEngine):
             if cmd in ["/exit", "exit", "quit", ":q"]:
                 print(f"{DIM}Goodbye!{RESET}")
                 break
+            elif cmd in ["clear", "cls", "/cls"]:
+                handle_clear_screen(retriever)
+            elif cmd in ["/reset", "/purge", "/clear-vault", "/clear"]:
+                handle_purge(retriever)
             elif cmd in ["/help", "help", "?"]:
                 print_help()
             elif cmd in ["/docs", "/list", "docs", "list"]:
                 handle_docs(retriever)
-            elif cmd in ["/clear", "clear"]:
-                handle_clear(retriever)
             elif "/upload" in cmd or "/add" in cmd:
                 # Handle /upload anywhere in the input (beginning, middle, or end)
                 file_arg = re.sub(r"(^|\s)(/upload|/add)(\s|$)", " ", user_input, flags=re.IGNORECASE).strip()
@@ -329,8 +361,8 @@ def main():
         elif first_arg in ["--docs", "-d"]:
             handle_docs(retriever)
             sys.exit(0)
-        elif first_arg in ["--clear", "-c"]:
-            handle_clear(retriever)
+        elif first_arg in ["--clear", "-c", "--reset", "-r", "--purge"]:
+            handle_purge(retriever, force=True)
             sys.exit(0)
         elif first_arg in ["--upload", "-u"]:
             if len(sys.argv) > 2:
