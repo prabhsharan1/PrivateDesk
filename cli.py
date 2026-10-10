@@ -47,20 +47,58 @@ def clean_finder_path(path_str: str) -> str:
     return os.path.expanduser(path_str)
 
 
+COMMANDS = [
+    "/upload",
+    "/add",
+    "/docs",
+    "/list",
+    "/clear",
+    "/help",
+    "/exit",
+    "exit",
+    "quit"
+]
+
+
+def setup_autocomplete():
+    """Sets up Tab completion for slash commands."""
+    try:
+        def completer(text, state):
+            options = [cmd for cmd in COMMANDS if cmd.startswith(text)]
+            if state < len(options):
+                return options[state] + " "
+            return None
+
+        readline.set_completer(completer)
+        if "libedit" in readline.__doc__:
+            readline.parse_and_bind("bind ^I rl_complete")
+        else:
+            readline.parse_and_bind("tab: complete")
+    except Exception:
+        pass
+
+
 def print_banner(retriever: DocumentRetriever):
-    """Displays the Claude Code inspired welcome banner."""
+    """Displays the Claude Code inspired welcome banner and quick command menu."""
     docs = retriever.list_documents()
     total_chunks = len(retriever.chunks)
     
     print(f"{CYAN}╭──────────────────────────────────────────────────────────────╮{RESET}")
     print(f"{CYAN}│{RESET}  {BOLD}PrivateDesk CLI{RESET} {DIM}v{VERSION}{RESET} — 100% Offline AI Assistant (Qwen 2.5)   {CYAN}│{RESET}")
-    print(f"{CYAN}│{RESET}  Commands: {YELLOW}/upload <file>{RESET}, {YELLOW}/docs{RESET}, {YELLOW}/clear{RESET}, {YELLOW}/help{RESET}, {YELLOW}/exit{RESET}           {CYAN}│{RESET}")
     print(f"{CYAN}╰──────────────────────────────────────────────────────────────╯{RESET}")
     
     if docs:
-        print(f"{DIM}[Vault: {len(docs)} document(s) loaded • {total_chunks} indexed chunks]{RESET}\n")
+        print(f"  {GREEN}●{RESET} {BOLD}Vault:{RESET} {len(docs)} document(s) loaded • {total_chunks} indexed chunks")
     else:
-        print(f"{DIM}[Vault is empty. Drag & drop a PDF/PPTX or type /upload to begin]{RESET}\n")
+        print(f"  {YELLOW}○{RESET} {DIM}Knowledge Vault is empty.{RESET}")
+
+    print(f"\n{BOLD}⚡ Quick Commands:{RESET}")
+    print(f"  {YELLOW}/upload <path>{RESET}   Add PDF or PPTX (drag & drop from Finder)")
+    print(f"  {YELLOW}/docs{RESET}            List loaded documents & slide/page counts")
+    print(f"  {YELLOW}/clear{RESET}           Purge all documents from cache")
+    print(f"  {YELLOW}/help{RESET}            Show full command guide & clipboard tricks")
+    print(f"  {YELLOW}/exit{RESET}            Exit PrivateDesk (or press Ctrl+D)")
+    print(f"\n{DIM}Tip: Type / and press [Tab] to auto-complete commands!{RESET}\n")
 
 
 def handle_upload(file_input, retriever: DocumentRetriever):
@@ -139,16 +177,21 @@ def handle_clear(retriever: DocumentRetriever):
 
 
 def print_help():
-    """Prints help message."""
+    """Prints comprehensive help message."""
     print(f"\n{BOLD}PrivateDesk Command Reference:{RESET}")
-    print(f"  {YELLOW}/upload <path>{RESET}   Add PDF or PPTX files (drag & drop from Finder supported)")
+    print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
+    print(f"  {YELLOW}/upload <path>{RESET}   Index PDF or PPTX files (drag & drop supported)")
     print(f"  {YELLOW}/docs{RESET}            List all loaded documents and chunk stats")
     print(f"  {YELLOW}/clear{RESET}           Purge all loaded documents from memory and disk")
     print(f"  {YELLOW}/help{RESET}            Display this help screen")
-    print(f"  {YELLOW}/exit{RESET}            Quit PrivateDesk\n")
-    print(f"{BOLD}Terminal Shortcuts:{RESET}")
-    print(f"  • One-shot query:   {CYAN}privatedesk \"What is the laptop loan policy?\"{RESET}")
-    print(f"  • Clipboard pipe:   {CYAN}pbpaste | privatedesk{RESET}\n")
+    print(f"  {YELLOW}/exit{RESET}            Quit PrivateDesk (or press Ctrl+D)\n")
+    print(f"{BOLD}💡 Shortcuts & Power Tricks:{RESET}")
+    print(f"  • {BOLD}One-shot query:{RESET}      {CYAN}privatedesk \"What is the laptop loan policy?\"{RESET}")
+    print(f"  • {BOLD}Mac Clipboard pipe:{RESET}  {CYAN}pbpaste | privatedesk{RESET}")
+    print(f"  • {BOLD}Win Clipboard pipe:{RESET}  {CYAN}Get-Clipboard | privatedesk{RESET}")
+    print(f"  • {BOLD}Pipe server logs:{RESET}    {CYAN}cat error.log | privatedesk \"Explain this error\"{RESET}")
+    print(f"  • {BOLD}Tab Auto-complete:{RESET}   Type {YELLOW}/{RESET} and hit {BOLD}[Tab]{RESET} to complete commands")
+    print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}\n")
 
 
 def answer_query(query: str, retriever: DocumentRetriever, engine: LLMEngine):
@@ -183,6 +226,7 @@ def answer_query(query: str, retriever: DocumentRetriever, engine: LLMEngine):
 
 def run_repl(retriever: DocumentRetriever, engine: LLMEngine):
     """Runs the interactive REPL loop."""
+    setup_autocomplete()
     print_banner(retriever)
 
     while True:
