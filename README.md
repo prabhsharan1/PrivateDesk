@@ -22,23 +22,28 @@ Uploading confidential internal files to cloud AI tools like ChatGPT or Gemini r
 
 ## 🚀 1-Line Installation
 
-Open **Terminal** on your Mac and run:
-
+### macOS (Terminal)
 ```bash
 curl -fsSL https://raw.githubusercontent.com/prabhsharan1/PrivateDesk/main/install.sh | bash
+```
+
+### Windows (PowerShell)
+```powershell
+irm https://raw.githubusercontent.com/prabhsharan1/PrivateDesk/main/install.ps1 | iex
 ```
 
 *(Or clone the repository manually):*
 ```bash
 git clone https://github.com/prabhsharan1/PrivateDesk.git
-cd PrivateDesk && ./install.sh
+cd PrivateDesk
+# macOS: ./install.sh  |  Windows: .\install.ps1
 ```
 
 ### What the installer does:
 1. Verifies Python 3.10+ and sets up an isolated environment at `~/.privatedesk/venv`.
 2. Installs lightweight document parsers (`pypdf`, `python-pptx`, `requests`).
 3. Verifies [Ollama](https://ollama.com) and pulls the compact `qwen2.5:1.5b` model (~986 MB).
-4. Creates the global `privatedesk` command in `~/.local/bin/privatedesk` and configures your `~/.zshrc` PATH.
+4. Creates the global `privatedesk` command and configures your system PATH.
 
 ---
 
@@ -194,17 +199,19 @@ privatedesk "What are the core SLAs for Priority 1 issues?"
 
 ---
 
-### Mode 3: Mac Clipboard Pipe (`pbpaste`)
-Copy any error message, ticket, or customer email on your screen (`Cmd + C`), then pipe it straight into PrivateDesk:
+### Mode 3: Clipboard Piping (`pbpaste` / `Get-Clipboard`)
+Copy any error message, ticket, or customer email on your screen (`Cmd + C` on Mac, `Ctrl + C` on Windows), then pipe it straight into PrivateDesk:
 
+**macOS (Terminal):**
 ```bash
 pbpaste | privatedesk
+pbpaste | privatedesk "Summarize this email and draft a 3-bullet resolution"
 ```
 
-Or add specific instructions with piped input:
-
-```bash
-pbpaste | privatedesk "Summarize this email and draft a 3-bullet resolution"
+**Windows (PowerShell):**
+```powershell
+Get-Clipboard | privatedesk
+Get-Clipboard | privatedesk "Summarize this email and draft a 3-bullet resolution"
 ```
 
 ---
