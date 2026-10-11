@@ -15,15 +15,51 @@ echo -e "${CYAN}==========================================================${RESE
 echo -e "${BOLD}  🚀 Installing PrivateDesk Terminal AI Assistant${RESET}"
 echo -e "${CYAN}==========================================================${RESET}"
 
-# 1. Check Python
+# Helper to prompt user even when piped via curl | bash
+ask_permission() {
+    local prompt_msg="$1"
+    local default_ans="${2:-y}"
+    local user_reply=""
+    if [ -t 0 ]; then
+        read -p "$prompt_msg " -r user_reply
+    elif [ -e /dev/tty ]; then
+        read -p "$prompt_msg " -r user_reply < /dev/tty || user_reply="$default_ans"
+    else
+        user_reply="$default_ans"
+    fi
+    user_reply="${user_reply:-$default_ans}"
+    [[ "$user_reply" =~ ^[Yy]$ ]]
+}
+
+# 1. Check & Install Python 3
 PYTHON_BIN=""
 if command -v python3 &>/dev/null; then
     PYTHON_BIN="python3"
 elif command -v python &>/dev/null; then
     PYTHON_BIN="python"
-else
-    echo -e "${YELLOW}❌ Error: Python 3 is required. Please install Python 3.10+.${RESET}"
-    exit 1
+fi
+
+if [ -z "$PYTHON_BIN" ]; then
+    echo -e "${YELLOW}⚠️ Python 3.10+ is required but not installed.${RESET}"
+    if ask_permission "Would you like PrivateDesk to install Python 3 for you now? [Y/n]"; then
+        if command -v brew &>/dev/null; then
+            echo -e "${CYAN}🍺 Installing Python via Homebrew...${RESET}"
+            brew install python
+            PYTHON_BIN="python3"
+        elif [ "$(uname -s)" = "Darwin" ]; then
+            echo -e "${CYAN}⚙️ Triggering Xcode Command Line Tools install...${RESET}"
+            xcode-select --install || true
+            echo -e "${YELLOW}Please complete the system dialog and rerun this installer.${RESET}"
+            exit 1
+        elif command -v apt-get &>/dev/null; then
+            echo -e "${CYAN}⚙️ Installing Python via apt...${RESET}"
+            sudo apt-get update && sudo apt-get install -y python3 python3-venv python3-pip
+            PYTHON_BIN="python3"
+        fi
+    else
+        echo -e "${RED}Python 3 is required to continue. Installation cancelled.${RESET}"
+        exit 1
+    fi
 fi
 echo -e "${GREEN}✔ Detected Python:${RESET} $($PYTHON_BIN --version)"
 
@@ -74,14 +110,36 @@ echo -e "${CYAN}📦 Installing dependencies (pypdf, python-pptx, requests)...${
 "$VENV_PIP" install --quiet --upgrade pip
 "$VENV_PIP" install --quiet -r "$APP_DIR/requirements.txt"
 
-# 5. Check & Pull Local AI Engine (Qwen 2.5 via Ollama)
+# 5. Check & Provision Local AI Engine (Ollama + Qwen 2.5)
 echo -e "${CYAN}🧠 Checking local AI engine...${RESET}"
+if ! command -v ollama &>/dev/null; then
+    echo -e "${YELLOW}⚠️ Ollama is required for 100% offline, on-device AI inference.${RESET}"
+    if ask_permission "Would you like PrivateDesk to install Ollama for you now? [Y/n]"; then
+        if command -v brew &>/dev/null; then
+            echo -e "${CYAN}🍺 Installing Ollama via Homebrew...${RESET}"
+            brew install --cask ollama || brew install ollama
+        else
+            echo -e "${CYAN}⚙️ Downloading and installing Ollama...${RESET}"
+            curl -fsSL https://ollama.com/install.sh | sh
+        fi
+    else
+        echo -e "${YELLOW}ℹ️ Skipping Ollama install. You can manually install it anytime from https://ollama.com${RESET}"
+    fi
+fi
+
 if command -v ollama &>/dev/null; then
     echo -e "${GREEN}✔ Found Ollama.${RESET} Ensuring Qwen 2.5 (1.5B) model is ready..."
+    # Start Ollama service if not already responding
+    if ! curl -s http://127.0.0.1:11434/api/tags &>/dev/null; then
+        echo -e "${CYAN}⚙️ Starting local Ollama service...${RESET}"
+        if [ "$(uname -s)" = "Darwin" ] && [ -d "/Applications/Ollama.app" ]; then
+            open -a Ollama
+        else
+            ollama serve &>/dev/null &
+        fi
+        sleep 3
+    fi
     ollama pull qwen2.5:1.5b || true
-else
-    echo -e "${YELLOW}ℹ️ Ollama CLI not found in PATH yet.${RESET}"
-    echo -e "   To run 100% offline, download Ollama from: ${BOLD}https://ollama.com${RESET}"
 fi
 
 # 6. Create Global Executable Wrapper
@@ -97,19 +155,22 @@ EOF
 chmod +x "$WRAPPER_PATH"
 echo -e "${GREEN}✔ Created executable at:${RESET} $WRAPPER_PATH"
 
-# Optional: Try symlinking to /usr/local/bin if writable
+# Optional: Symlink to /usr/local/bin so it is in standard PATH immediately
 if [ -w "/usr/local/bin" ]; then
     ln -sf "$WRAPPER_PATH" "/usr/local/bin/privatedesk" 2>/dev/null || true
+    echo -e "${GREEN}✔ Linked to /usr/local/bin/privatedesk (globally accessible).${RESET}"
 fi
 
-# 7. Ensure ~/.local/bin is in PATH in ~/.zshrc
-ZSHRC="$HOME/.zshrc"
-if [ -f "$ZSHRC" ]; then
-    if ! grep -q 'export PATH="$HOME/.local/bin:$PATH"' "$ZSHRC"; then
-        echo -e '\n# PrivateDesk CLI\nexport PATH="$HOME/.local/bin:$PATH"' >> "$ZSHRC"
-        echo -e "${GREEN}✔ Added ~/.local/bin to ~/.zshrc PATH.${RESET}"
+# 7. Ensure ~/.local/bin is permanently in PATH across shells
+export PATH="$HOME/.local/bin:$PATH"
+for rc in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.profile"; do
+    if [ -f "$rc" ]; then
+        if ! grep -q 'export PATH="$HOME/.local/bin:$PATH"' "$rc"; then
+            echo -e '\n# PrivateDesk CLI\nexport PATH="$HOME/.local/bin:$PATH"' >> "$rc"
+            echo -e "${GREEN}✔ Added ~/.local/bin to $rc PATH.${RESET}"
+        fi
     fi
-fi
+done
 
 echo -e "${CYAN}==========================================================${RESET}"
 echo -e "${BOLD}  🎉 PrivateDesk CLI Installation Complete!${RESET}"

@@ -5,6 +5,10 @@ Zero external API calls. Zero cloud telemetry. Zero token limits.
 """
 
 import os
+import sys
+import time
+import shutil
+import subprocess
 import requests
 
 SYSTEM_PROMPT = """You are 'PrivateDesk Assistant', an internal on-device technical assistant for support staff, co-ops, and interns.
@@ -22,6 +26,118 @@ class LLMEngine:
         self.local_url = os.environ.get("LOCAL_LLM_URL", "http://127.0.0.1:11434/api/generate").strip()
         self.llama_cpp_url = os.environ.get("LLAMA_CPP_URL", "http://127.0.0.1:8080/v1/chat/completions").strip()
         self.model_name = os.environ.get("LOCAL_MODEL_NAME", "qwen2.5:1.5b").strip()
+
+    def is_ollama_online(self) -> bool:
+        """Checks if local Ollama daemon is reachable."""
+        try:
+            res = requests.get("http://127.0.0.1:11434/api/tags", timeout=2)
+            return res.status_code == 200
+        except Exception:
+            return False
+
+    def is_model_installed(self) -> bool:
+        """Checks if configured model is already pulled in Ollama."""
+        try:
+            res = requests.get("http://127.0.0.1:11434/api/tags", timeout=3)
+            if res.status_code == 200:
+                models = [m.get("name", "") for m in res.json().get("models", [])]
+                return any(self.model_name in m or m.startswith(self.model_name) for m in models)
+        except Exception:
+            pass
+        return False
+
+    def start_ollama(self) -> bool:
+        """Attempts to start the Ollama daemon in the background."""
+        if self.is_ollama_online():
+            return True
+
+        ollama_bin = shutil.which("ollama")
+        if not ollama_bin:
+            if os.path.exists("/Applications/Ollama.app/Contents/Resources/ollama"):
+                ollama_bin = "/Applications/Ollama.app/Contents/Resources/ollama"
+            elif os.path.exists(os.path.expanduser("~/AppData/Local/Programs/Ollama/ollama.exe")):
+                ollama_bin = os.path.expanduser("~/AppData/Local/Programs/Ollama/ollama.exe")
+
+        if not ollama_bin and not (sys.platform == "darwin" and os.path.isdir("/Applications/Ollama.app")):
+            return False
+
+        print("\033[36m⚙️ Starting local Ollama service in background...\033[0m")
+        try:
+            if sys.platform == "darwin" and os.path.isdir("/Applications/Ollama.app"):
+                subprocess.Popen(["open", "-a", "Ollama"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                subprocess.Popen([ollama_bin, "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            for _ in range(6):
+                time.sleep(1)
+                if self.is_ollama_online():
+                    print("\033[32m✔ Local Ollama service is online.\033[0m")
+                    return True
+        except Exception:
+            pass
+
+        return False
+
+    def pull_model_if_needed(self) -> bool:
+        """Pulls the model if not present."""
+        if self.is_model_installed():
+            return True
+
+        ollama_bin = shutil.which("ollama") or "ollama"
+        print(f"\033[36m📥 Downloading local AI model ({self.model_name})...\033[0m")
+        try:
+            res = subprocess.run([ollama_bin, "pull", self.model_name])
+            return res.returncode == 0
+        except Exception:
+            return False
+
+    def prompt_and_install_ollama(self) -> bool:
+        """Asks user permission to install Ollama automatically if missing."""
+        print("\033[33m⚠️ Ollama is required for 100% private, on-device AI inference.\033[0m")
+        try:
+            confirm = input("Would you like PrivateDesk to install Ollama for you now? [Y/n]: ").strip().lower()
+            if confirm not in ["", "y", "yes"]:
+                print("\033[2mOllama installation skipped.\033[0m")
+                return False
+        except (KeyboardInterrupt, EOFError):
+            return False
+
+        print("\033[36m🚀 Installing Ollama...\033[0m")
+        try:
+            if sys.platform == "darwin":
+                if shutil.which("brew"):
+                    subprocess.run(["brew", "install", "--cask", "ollama"], check=True)
+                else:
+                    subprocess.run("curl -fsSL https://ollama.com/install.sh | sh", shell=True, check=True)
+            elif sys.platform == "win32":
+                if shutil.which("winget"):
+                    subprocess.run(["winget", "install", "-e", "--id", "Ollama.Ollama", "--accept-source-agreements", "--accept-package-agreements"], check=True)
+                else:
+                    return False
+            else:  # Linux
+                subprocess.run("curl -fsSL https://ollama.com/install.sh | sh", shell=True, check=True)
+
+            self.start_ollama()
+            self.pull_model_if_needed()
+            return True
+        except Exception as e:
+            print(f"\033[31m❌ Error installing Ollama:\033[0m {e}")
+            return False
+
+    def auto_provision_ai_engine(self) -> bool:
+        """Ensures Ollama is installed, running, and the model is downloaded."""
+        if self.is_ollama_online():
+            self.pull_model_if_needed()
+            return True
+
+        if self.start_ollama():
+            self.pull_model_if_needed()
+            return True
+
+        if self.prompt_and_install_ollama():
+            return True
+
+        return False
 
     def generate(self, user_query: str, retrieved_chunks: list[dict]) -> tuple[str, list[dict]]:
         """
@@ -55,6 +171,12 @@ User Question: {user_query}
         if ollama_reply:
             return ollama_reply, sources
 
+        # Auto-provisioning & Recovery: Try starting Ollama or asking permission to install it
+        if self.auto_provision_ai_engine():
+            ollama_reply = self._query_ollama(prompt_payload)
+            if ollama_reply:
+                return ollama_reply, sources
+
         # 2. Try local llama.cpp server (http://127.0.0.1:8080)
         llama_cpp_reply = self._query_llama_cpp(prompt_payload)
         if llama_cpp_reply:
@@ -63,11 +185,11 @@ User Question: {user_query}
         # 3. Inform user that local model engine is offline
         return (
             "⚠️ **Local AI Engine is Offline**\n\n"
-            "To keep your data 100% private, PrivateDesk runs models locally on your Mac without cloud APIs.\n\n"
+            "To keep your data 100% private, PrivateDesk runs models locally without cloud APIs.\n\n"
             "**How to start the offline model:**\n"
-            "1. Download [Ollama](https://ollama.com) (or launch your local llama.cpp server).\n"
-            "2. Open Terminal and run: `ollama run qwen2.5:1.5b`\n"
-            "3. Refresh or ask your question again!",
+            "1. Run `ollama serve` or open the Ollama app.\n"
+            "2. Ensure the model is downloaded: `ollama pull qwen2.5:1.5b`\n"
+            "3. Ask your question again!",
             sources
         )
 
@@ -87,6 +209,12 @@ User Question: {user_query}
             if res.status_code == 200:
                 data = res.json()
                 return data.get("response", "").strip()
+            elif res.status_code == 404:
+                # Model not found in Ollama: auto-pull and retry once
+                if self.pull_model_if_needed():
+                    retry_res = requests.post(self.local_url, json=payload, timeout=30)
+                    if retry_res.status_code == 200:
+                        return retry_res.json().get("response", "").strip()
         except requests.exceptions.RequestException:
             pass
         return None

@@ -8,15 +8,31 @@ Write-Host "==========================================================" -Foregro
 Write-Host "  🚀 Installing PrivateDesk Terminal AI Assistant (Windows)" -ForegroundColor Green
 Write-Host "==========================================================" -ForegroundColor Cyan
 
-# 1. Check Python
+# 1. Check & Install Python
 $PythonBin = ""
 if (Get-Command python -ErrorAction SilentlyContinue) {
     $PythonBin = "python"
 } elseif (Get-Command py -ErrorAction SilentlyContinue) {
     $PythonBin = "py"
 } else {
-    Write-Host "❌ Error: Python 3 is required. Please install Python 3.10+ from python.org or Microsoft Store." -ForegroundColor Red
-    exit 1
+    Write-Host "⚠️ Python 3.10+ is required but not detected." -ForegroundColor Yellow
+    $installPy = Read-Host "Would you like PrivateDesk to automatically install Python 3 via winget? [Y/n]"
+    if ($installPy -match "^[Yy]$" -or $installPy -eq "") {
+        if (Get-Command winget -ErrorAction SilentlyContinue) {
+            Write-Host "⚙️ Installing Python 3.12 via winget..." -ForegroundColor Cyan
+            winget install -e --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements
+            # Refresh Path in current session
+            $env:Path = [System.Environment]::GetEnvironmentVariable("Path","User") + ";" + [System.Environment]::GetEnvironmentVariable("Path","Machine")
+            if (Get-Command python -ErrorAction SilentlyContinue) { $PythonBin = "python" }
+            elseif (Get-Command py -ErrorAction SilentlyContinue) { $PythonBin = "py" }
+        } else {
+            Write-Host "❌ winget is not available. Please install Python from https://python.org" -ForegroundColor Red
+            exit 1
+        }
+    } else {
+        Write-Host "Python installation cancelled. Exiting." -ForegroundColor Red
+        exit 1
+    }
 }
 
 $PyVersion = & $PythonBin --version
@@ -62,14 +78,29 @@ Write-Host "📦 Installing dependencies (pypdf, python-pptx, requests)..." -For
 & $VenvPip install --quiet --upgrade pip
 & $VenvPip install --quiet -r (Join-Path $AppDir "requirements.txt")
 
-# 5. Check Ollama
+# 5. Check & Provision Local AI Engine (Ollama + Qwen 2.5)
 Write-Host "🧠 Checking local AI engine..." -ForegroundColor Cyan
+if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
+    Write-Host "⚠️ Ollama is required for 100% offline, on-device AI inference." -ForegroundColor Yellow
+    $installOllama = Read-Host "Would you like PrivateDesk to install Ollama via winget? [Y/n]"
+    if ($installOllama -match "^[Yy]$" -or $installOllama -eq "") {
+        if (Get-Command winget -ErrorAction SilentlyContinue) {
+            Write-Host "⚙️ Installing Ollama via winget..." -ForegroundColor Cyan
+            winget install -e --id Ollama.Ollama --accept-source-agreements --accept-package-agreements
+            $env:Path = [System.Environment]::GetEnvironmentVariable("Path","User") + ";" + [System.Environment]::GetEnvironmentVariable("Path","Machine")
+        } else {
+            Write-Host "ℹ️ Please install Ollama manually from https://ollama.com/download/windows" -ForegroundColor Yellow
+        }
+    }
+}
+
 if (Get-Command ollama -ErrorAction SilentlyContinue) {
     Write-Host "✔ Found Ollama. Ensuring Qwen 2.5 (1.5B) model is ready..." -ForegroundColor Green
+    if (-not (Get-Process -Name "ollama" -ErrorAction SilentlyContinue)) {
+        Start-Process "ollama" -ArgumentList "serve" -WindowStyle Hidden
+        Start-Sleep -Seconds 3
+    }
     ollama pull qwen2.5:1.5b
-} else {
-    Write-Host "ℹ️ Ollama not found in PATH." -ForegroundColor Yellow
-    Write-Host "   To enable offline AI on Windows, download Ollama from: https://ollama.com/download/windows" -ForegroundColor Yellow
 }
 
 # 6. Create Global Executable (privatedesk.cmd)
@@ -81,12 +112,13 @@ $CmdWrapper = Join-Path $BinDir "privatedesk.cmd"
 
 Write-Host "✔ Created executable at: $CmdWrapper" -ForegroundColor Green
 
-# 7. Add to User PATH if not present
+# 7. Add to User PATH & active PowerShell session
 $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if ($UserPath -notlike "*$BinDir*") {
     [Environment]::SetEnvironmentVariable("Path", "$UserPath;$BinDir", "User")
     Write-Host "✔ Added $BinDir to User PATH." -ForegroundColor Green
 }
+$env:Path = "$env:Path;$BinDir"
 
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host "  🎉 PrivateDesk Windows Installation Complete!" -ForegroundColor Green
