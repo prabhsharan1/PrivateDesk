@@ -15,9 +15,14 @@ if ($confirmation -notmatch "^[Yy]$") {
     exit 0
 }
 
-$HomeDir = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::UserProfile)
-$PrivateDeskHome = Join-Path $HomeDir ".privatedesk"
-$BinDir = Join-Path $PrivateDeskHome "bin"
+$HomeDir = $env:USERPROFILE
+if (-not $HomeDir) {
+    $HomeDir = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::UserProfile)
+}
+$HomeDir = $HomeDir.TrimEnd('\').TrimEnd('/')
+$PrivateDeskHome = "$HomeDir\.privatedesk"
+$BinDir = "$PrivateDeskHome\bin"
+$BuggyHome = "$HomeDir.privatedesk"
 
 # 1. Remove from User PATH
 $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -32,6 +37,10 @@ if (Test-Path $PrivateDeskHome) {
     Write-Host "⚙️ Removing $PrivateDeskHome..." -ForegroundColor Cyan
     Remove-Item -Path $PrivateDeskHome -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host "✔ Removed: $PrivateDeskHome" -ForegroundColor Green
+}
+
+if (Test-Path $BuggyHome) {
+    Remove-Item -Path $BuggyHome -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host "==========================================================" -ForegroundColor Cyan

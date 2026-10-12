@@ -39,10 +39,21 @@ $PyVersion = & $PythonBin --version
 Write-Host "✔ Detected Python: $PyVersion" -ForegroundColor Green
 
 # 2. Determine App Directory
-$HomeDir = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::UserProfile)
-$PrivateDeskHome = Join-Path $HomeDir ".privatedesk"
-$AppDir = Join-Path $PrivateDeskHome "app"
-$VenvDir = Join-Path $PrivateDeskHome "venv"
+$HomeDir = $env:USERPROFILE
+if (-not $HomeDir) {
+    $HomeDir = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::UserProfile)
+}
+$HomeDir = $HomeDir.TrimEnd('\').TrimEnd('/')
+$PrivateDeskHome = "$HomeDir\.privatedesk"
+$AppDir = "$PrivateDeskHome\app"
+$VenvDir = "$PrivateDeskHome\venv"
+$BinDir = "$PrivateDeskHome\bin"
+
+# Cleanup malformed path from previous runs if it exists
+$BuggyHome = "$HomeDir.privatedesk"
+if (Test-Path $BuggyHome) {
+    Remove-Item -Path $BuggyHome -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 # Check if running from local repo clone or piped via web
 if (Test-Path "cli.py") {
@@ -55,28 +66,29 @@ if (Test-Path "cli.py") {
     if (Get-Command git -ErrorAction SilentlyContinue) {
         git clone --depth 1 https://github.com/prabhsharan1/PrivateDesk.git $AppDir 2>$null
     } else {
-        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/prabhsharan1/PrivateDesk/main/cli.py" -OutFile (Join-Path $AppDir "cli.py") -UseBasicParsing
-        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/prabhsharan1/PrivateDesk/main/parser.py" -OutFile (Join-Path $AppDir "parser.py") -UseBasicParsing
-        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/prabhsharan1/PrivateDesk/main/retriever.py" -OutFile (Join-Path $AppDir "retriever.py") -UseBasicParsing
-        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/prabhsharan1/PrivateDesk/main/storage.py" -OutFile (Join-Path $AppDir "storage.py") -UseBasicParsing
-        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/prabhsharan1/PrivateDesk/main/llm_engine.py" -OutFile (Join-Path $AppDir "llm_engine.py") -UseBasicParsing
-        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/prabhsharan1/PrivateDesk/main/requirements.txt" -OutFile (Join-Path $AppDir "requirements.txt") -UseBasicParsing
+        $baseUrl = "https://raw.githubusercontent.com/prabhsharan1/PrivateDesk/main"
+        $files = @("cli.py", "parser.py", "retriever.py", "storage.py", "llm_engine.py", "requirements.txt")
+        foreach ($f in $files) {
+            Invoke-WebRequest -Uri "$baseUrl/$f" -OutFile "$AppDir\$f" -UseBasicParsing
+        }
     }
 }
 
 # 3. Setup Virtual Environment
-if (-not (Test-Path $VenvDir)) {
+$VenvPython = "$VenvDir\Scripts\python.exe"
+if (-not (Test-Path $VenvPython)) {
     Write-Host "⚙️ Creating virtual environment at $VenvDir..." -ForegroundColor Cyan
+    if (Test-Path $VenvDir) {
+        Remove-Item -Path $VenvDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
     & $PythonBin -m venv $VenvDir
 }
 
-$VenvPython = Join-Path $VenvDir "Scripts\python.exe"
-$VenvPip = Join-Path $VenvDir "Scripts\pip.exe"
-
-# 4. Install Dependencies
+# 4. Install Dependencies (Using Python module syntax for bulletproof pip execution)
 Write-Host "📦 Installing dependencies (pypdf, python-pptx, requests)..." -ForegroundColor Cyan
-& $VenvPip install --quiet --upgrade pip
-& $VenvPip install --quiet -r (Join-Path $AppDir "requirements.txt")
+& $VenvPython -m ensurepip --default-pip 2>$null
+& $VenvPython -m pip install --quiet --upgrade pip
+& $VenvPython -m pip install --quiet -r "$AppDir\requirements.txt"
 
 # 5. Check & Provision Local AI Engine (Ollama + Qwen 2.5)
 Write-Host "🧠 Checking local AI engine..." -ForegroundColor Cyan
@@ -104,10 +116,9 @@ if (Get-Command ollama -ErrorAction SilentlyContinue) {
 }
 
 # 6. Create Global Executable (privatedesk.cmd)
-$BinDir = Join-Path $PrivateDeskHome "bin"
 New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
 
-$CmdWrapper = Join-Path $BinDir "privatedesk.cmd"
+$CmdWrapper = "$BinDir\privatedesk.cmd"
 "@echo off`n`"$VenvPython`" `"$AppDir\cli.py`" %*" | Out-File -FilePath $CmdWrapper -Encoding ascii
 
 Write-Host "✔ Created executable at: $CmdWrapper" -ForegroundColor Green
