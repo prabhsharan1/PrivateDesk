@@ -4,6 +4,8 @@ Runs strictly offline via local inference (Ollama or llama.cpp).
 Zero external API calls. Zero cloud telemetry. Zero token limits.
 """
 
+from __future__ import annotations
+
 import os
 import sys
 import time

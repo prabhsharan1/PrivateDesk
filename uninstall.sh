@@ -10,20 +10,23 @@ GREEN="\033[32m"
 CYAN="\033[36m"
 YELLOW="\033[33m"
 BOLD="\033[1m"
+DIM="\033[2m"
 RESET="\033[0m"
 
 echo -e "${CYAN}==========================================================${RESET}"
 echo -e "${BOLD}  🗑️  Uninstalling PrivateDesk CLI${RESET}"
 echo -e "${CYAN}==========================================================${RESET}"
 
-# Confirm with user if interactive
+# Confirm with the user (works even when piped through `curl | bash`)
+REPLY=""
 if [ -t 0 ]; then
-    read -p "Are you sure you want to completely remove PrivateDesk and its local cache? [y/N] " -n 1 -r
-    echo ""
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo -e "${YELLOW}Uninstallation cancelled.${RESET}"
-        exit 0
-    fi
+    read -r -p "Completely remove PrivateDesk and its local cache? [y/N] " REPLY
+elif [ -r /dev/tty ]; then
+    read -r -p "Completely remove PrivateDesk and its local cache? [y/N] " REPLY < /dev/tty || REPLY=""
+fi
+if [[ ! "$REPLY" =~ ^[Yy] ]]; then
+    echo -e "${YELLOW}Uninstallation cancelled.${RESET}"
+    exit 0
 fi
 
 # 1. Remove executables and symlinks

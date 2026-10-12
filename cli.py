@@ -9,7 +9,10 @@ import sys
 import os
 import re
 import shlex
-import readline
+try:
+    import readline  # Not available on Windows
+except ImportError:
+    readline = None
 import shutil
 from pathlib import Path
 
@@ -18,6 +21,15 @@ from retriever import DocumentRetriever
 from llm_engine import LLMEngine
 
 VERSION = "2.0.0"
+
+# Windows consoles: enable ANSI colors and force UTF-8 so emoji/box characters never crash printing
+if os.name == "nt":
+    os.system("")
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 # ANSI Terminal Colors & Styling
 BOLD = "\033[1m"
@@ -43,8 +55,10 @@ def clean_finder_path(path_str: str) -> str:
     if (path_str.startswith("'") and path_str.endswith("'")) or \
        (path_str.startswith('"') and path_str.endswith('"')):
         path_str = path_str[1:-1]
-    # Unescape backslash-escaped characters (e.g. \ , \[, \])
-    path_str = re.sub(r"\\(.)", r"\1", path_str)
+    # Unescape backslash-escaped characters (e.g. \ , \[, \]) -- macOS/Linux only.
+    # On Windows the backslash is the path separator and must be preserved.
+    if os.name != "nt":
+        path_str = re.sub(r"\\(.)", r"\1", path_str)
     return os.path.expanduser(path_str)
 
 
@@ -149,7 +163,7 @@ def handle_upload(file_input, retriever: DocumentRetriever):
             raw_paths = [single_candidate]
         else:
             try:
-                raw_paths = shlex.split(clean_input)
+                raw_paths = shlex.split(clean_input, posix=(os.name != "nt"))
             except Exception:
                 raw_paths = [clean_input]
     else:
@@ -241,6 +255,11 @@ def handle_purge(retriever: DocumentRetriever, force: bool = False):
 
 def handle_uninstall():
     """Uninstalls PrivateDesk and removes ~/.privatedesk, wrappers, and caches."""
+    if os.name == "nt":
+        print(f"{YELLOW}Windows can't delete files while PrivateDesk is running.{RESET}")
+        print("Exit this window, open PowerShell and run:")
+        print(f"  {CYAN}irm https://raw.githubusercontent.com/prabhsharan1/PrivateDesk/main/uninstall.ps1 | iex{RESET}\n")
+        return
     try:
         confirm = input(
             f"{YELLOW}⚠️ This will completely remove PrivateDesk, its virtual environment, and cached documents.\n"
