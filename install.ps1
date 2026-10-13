@@ -73,22 +73,50 @@ function Install-PrivateDesk {
     if (-not $Py) {
         Say "Python 3.9+ is required but no working Python was found." "Yellow"
         Say "(Windows may list a Microsoft Store 'python' shortcut, but it is not a real install.)" "DarkGray"
-        if (-not (Ask-YesNo "Install Python 3.12 automatically via winget?")) {
+        if (-not (Ask-YesNo "Install Python 3.12 automatically?")) {
             Say "Python is required. Install it from https://www.python.org/downloads/ and re-run this command." "Red"
             return
         }
-        if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-            Say "winget is not available on this PC. Install Python from https://www.python.org/downloads/ (tick 'Add to PATH') and re-run." "Red"
-            return
+
+        # Attempt 1: winget, pinned to the 'winget' source. The default search also queries the
+        # 'msstore' source, which fails with 0x8a15000f on PCs that never accepted its agreement.
+        if (Get-Command winget -ErrorAction SilentlyContinue) {
+            Say "Installing Python 3.12 via winget (this can take a minute)..." "Cyan"
+            winget install -e --id Python.Python.3.12 --source winget --scope user --silent --accept-source-agreements --accept-package-agreements
+            if ($LASTEXITCODE -ne 0) {
+                Say "winget could not install Python (exit code $LASTEXITCODE). Trying the official python.org installer instead..." "Yellow"
+            }
+            Refresh-SessionPath
+            $Py = Find-Python
         }
-        Say "Installing Python 3.12 via winget (this can take a minute)..." "Cyan"
-        winget install -e --id Python.Python.3.12 --scope user --accept-source-agreements --accept-package-agreements
-        Refresh-SessionPath
-        $Py = Find-Python
+
+        # Attempt 2: official python.org installer, per-user, silent, no admin rights needed.
         if (-not $Py) {
-            Say "Python was installed but could not be located yet. Close this window, open a NEW PowerShell, and re-run the install command." "Yellow"
+            $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
+            $pyUrl = "https://www.python.org/ftp/python/3.12.8/python-3.12.8-$arch.exe"
+            $pyExe = "$env:TEMP\python-3.12.8-$arch.exe"
+            try {
+                Say "Downloading Python 3.12 from python.org ($arch)..." "Cyan"
+                Invoke-WebRequest -Uri $pyUrl -OutFile $pyExe -UseBasicParsing
+                Say "Installing Python (per-user, silent)..." "Cyan"
+                $p = Start-Process -FilePath $pyExe -ArgumentList "/quiet", "InstallAllUsers=0", "PrependPath=1", "Include_launcher=1", "Include_test=0", "Include_doc=0" -Wait -PassThru
+                if ($p.ExitCode -ne 0) { Say "Python installer exited with code $($p.ExitCode)." "Yellow" }
+            } catch {
+                Say "Could not download/run the Python installer: $($_.Exception.Message)" "Red"
+            } finally {
+                Remove-Item -Path $pyExe -Force -ErrorAction SilentlyContinue
+            }
+            Refresh-SessionPath
+            $Py = Find-Python
+        }
+
+        if (-not $Py) {
+            Say "Python could not be installed automatically." "Red"
+            Say "  1) Download it from https://www.python.org/downloads/ (tick 'Add python.exe to PATH')" "Yellow"
+            Say "  2) Open a NEW PowerShell window and re-run the install command." "Yellow"
             return
         }
+        Say "Python installed successfully." "Green"
     }
     Say "Detected Python $($Py.Version) ($($Py.Exe))" "Green"
 
@@ -181,9 +209,13 @@ function Install-PrivateDesk {
     if (-not $Ollama) {
         Say "Ollama is required for 100% offline, on-device AI." "Yellow"
         if (Ask-YesNo "Install Ollama automatically?") {
+            $installed = $false
             if (Get-Command winget -ErrorAction SilentlyContinue) {
-                winget install -e --id Ollama.Ollama --accept-source-agreements --accept-package-agreements
-            } else {
+                winget install -e --id Ollama.Ollama --source winget --silent --accept-source-agreements --accept-package-agreements
+                $installed = ($LASTEXITCODE -eq 0)
+                if (-not $installed) { Say "winget could not install Ollama; trying the official installer instead..." "Yellow" }
+            }
+            if (-not $installed) {
                 $setup = "$env:TEMP\OllamaSetup.exe"
                 try {
                     Say "Downloading Ollama installer..." "Cyan"
@@ -191,6 +223,8 @@ function Install-PrivateDesk {
                     Start-Process -FilePath $setup -ArgumentList "/SILENT" -Wait
                 } catch {
                     Say "Automatic Ollama install failed. Get it from https://ollama.com/download/windows" "Yellow"
+                } finally {
+                    Remove-Item -Path $setup -Force -ErrorAction SilentlyContinue
                 }
             }
             Refresh-SessionPath
