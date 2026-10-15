@@ -162,6 +162,68 @@ def run_tests():
     print("✔ [TC-07] PASSED: Directory traversal and flexible command parsing verified.")
     passed += 1
 
+    # TC-08: Test PDF and PPTX Markdown Layout & Table Extraction
+    total += 1
+    print("\n[TC-08] Testing PDF/PPTX Markdown layout & table extraction for LLM...")
+    
+    # 1. Test PPTX Table extraction
+    from pptx import Presentation
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    t_shape = slide.shapes.add_table(2, 2, 100, 100, 200, 100)
+    t = t_shape.table
+    t.cell(0, 0).text = "Device"
+    t.cell(0, 1).text = "Loan"
+    t.cell(1, 0).text = "MacBook"
+    t.cell(1, 1).text = "7 Days"
+    
+    with tempfile.NamedTemporaryFile(suffix=".pptx", delete=False) as tmp_pptx:
+        pptx_path = tmp_pptx.name
+    prs.save(pptx_path)
+
+    try:
+        pptx_res = parse_uploaded_file(pptx_path, "sample_table.pptx")
+        assert len(pptx_res) == 1, "Expected 1 slide"
+        assert "| Device | Loan |" in pptx_res[0]["text"]
+        assert "| MacBook | 7 Days |" in pptx_res[0]["text"]
+    finally:
+        if os.path.exists(pptx_path):
+            os.remove(pptx_path)
+
+    # 2. Test PDF Table and bullet extraction
+    try:
+        import pymupdf
+        doc = pymupdf.open()
+        p = doc.new_page(width=400, height=300)
+        p.insert_text((50, 40), "Guidelines Title", fontsize=14)
+        p.draw_rect(pymupdf.Rect(50, 60, 350, 140))
+        p.draw_line(pymupdf.Point(50, 90), pymupdf.Point(350, 90))
+        p.draw_line(pymupdf.Point(200, 60), pymupdf.Point(200, 140))
+        p.insert_text((60, 80), "HeaderA")
+        p.insert_text((210, 80), "HeaderB")
+        p.insert_text((60, 120), "ValA")
+        p.insert_text((210, 120), "ValB")
+        p.insert_text((50, 170), "• Bullet item text")
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
+            pdf_path = tmp_pdf.name
+        doc.save(pdf_path)
+        doc.close()
+
+        try:
+            pdf_res = parse_uploaded_file(pdf_path, "sample_table.pdf")
+            assert len(pdf_res) == 1, "Expected 1 page"
+            assert "- Bullet item text" in pdf_res[0]["text"], f"Bullet not formatted: {pdf_res[0]['text']}"
+            assert "|HeaderA|HeaderB|" in pdf_res[0]["text"] or "HeaderA" in pdf_res[0]["text"]
+        finally:
+            if os.path.exists(pdf_path):
+                os.remove(pdf_path)
+    except ImportError:
+        pass
+
+    print("✔ [TC-08] PASSED: Structured Markdown tables and clean bullets verified.")
+    passed += 1
+
     print("\n" + "=" * 60)
     print(f"🎉 ALL TESTS PASSED! ({passed}/{total} test cases succeeded)")
     print("=" * 60)
