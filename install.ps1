@@ -31,19 +31,36 @@ function Install-PrivateDesk {
 
     # ------------------------------------------------------------------ 1. Python
     # `Get-Command python` can succeed on the Microsoft Store *stub* (WindowsApps\python.exe),
-    # which exists but cannot run or create a venv. So every candidate is actually executed.
+    # which exists but cannot run or create a venv. So every candidate is actually executed and
+    # judged ONLY by what it prints (never by $LASTEXITCODE, which is unreliable once a native
+    # command's pipeline has been cut short on Windows PowerShell 5.1).
+    $PyTried = New-Object System.Collections.ArrayList
+
     function Test-PythonCandidate($exe, $pyArgs) {
+        $label = (@($exe) + @($pyArgs)) -join " "
         try {
-            $out = & $exe @pyArgs -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>&1 | Select-Object -First 1
-            if ($LASTEXITCODE -ne 0) { return $null }
-            if ("$out" -match '^(\d+)\.(\d+)$' -and [int]$Matches[1] -eq 3 -and [int]$Matches[2] -ge 9) {
-                return @{ Exe = $exe; Args = $pyArgs; Version = "$out" }
+            $out = & $exe @pyArgs -c "import sys;print(sys.version_info[0]*100+sys.version_info[1])" 2>&1
+            $numLine = @($out | ForEach-Object { "$_".Trim() } | Where-Object { $_ -match '^\d{3,4}$' }) | Select-Object -Last 1
+            if ($numLine) {
+                $n = [int]$numLine
+                if ($n -ge 309 -and $n -lt 400) {
+                    $ver = "{0}.{1}" -f [math]::Floor($n / 100), ($n % 100)
+                    [void]$PyTried.Add("OK     $label (Python $ver)")
+                    return @{ Exe = $exe; Args = $pyArgs; Version = $ver }
+                }
+                [void]$PyTried.Add("TOO OLD $label (Python $n)")
+                return $null
             }
-        } catch {}
+            $firstLine = ("$($out | Select-Object -First 1)").Trim()
+            [void]$PyTried.Add("UNUSABLE $label -> $firstLine")
+        } catch {
+            [void]$PyTried.Add("ERROR  $label -> $($_.Exception.Message)")
+        }
         return $null
     }
 
     function Find-Python {
+        # 1) Commands on PATH
         $candidates = @(
             @{ Exe = "py";      Args = @("-3") },
             @{ Exe = "python";  Args = @() },
@@ -55,6 +72,22 @@ function Install-PrivateDesk {
                 if ($found) { return $found }
             }
         }
+        # 2) Windows registry: every real Python install (winget, python.org, all-users or per-user) registers here
+        $regRoots = @("HKCU:\Software\Python\PythonCore", "HKLM:\Software\Python\PythonCore", "HKLM:\Software\WOW6432Node\Python\PythonCore")
+        foreach ($root in $regRoots) {
+            if (-not (Test-Path $root)) { continue }
+            foreach ($k in (Get-ChildItem -Path $root -ErrorAction SilentlyContinue | Sort-Object Name -Descending)) {
+                $ip = Get-ItemProperty -Path "$($k.PSPath)\InstallPath" -ErrorAction SilentlyContinue
+                if (-not $ip) { continue }
+                $exe = $ip.ExecutablePath
+                if (-not $exe -and $ip.'(default)') { $exe = ("$($ip.'(default)')").TrimEnd('\') + "\python.exe" }
+                if ($exe -and (Test-Path $exe)) {
+                    $found = Test-PythonCandidate $exe @()
+                    if ($found) { return $found }
+                }
+            }
+        }
+        # 3) Well-known install folders
         $globs = @(
             "$env:LOCALAPPDATA\Programs\Python\Python3*\python.exe",
             "$env:ProgramFiles\Python3*\python.exe",
@@ -84,7 +117,7 @@ function Install-PrivateDesk {
             Say "Installing Python 3.12 via winget (this can take a minute)..." "Cyan"
             winget install -e --id Python.Python.3.12 --source winget --scope user --silent --accept-source-agreements --accept-package-agreements
             if ($LASTEXITCODE -ne 0) {
-                Say "winget could not install Python (exit code $LASTEXITCODE). Trying the official python.org installer instead..." "Yellow"
+                Say "winget reported exit code $LASTEXITCODE. Checking whether Python is usable anyway..." "Yellow"
             }
             Refresh-SessionPath
             $Py = Find-Python
@@ -93,14 +126,19 @@ function Install-PrivateDesk {
         # Attempt 2: official python.org installer, per-user, silent, no admin rights needed.
         if (-not $Py) {
             $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
-            $pyUrl = "https://www.python.org/ftp/python/3.12.8/python-3.12.8-$arch.exe"
-            $pyExe = "$env:TEMP\python-3.12.8-$arch.exe"
+            $pyUrl = "https://www.python.org/ftp/python/3.12.10/python-3.12.10-$arch.exe"
+            $pyExe = "$env:TEMP\python-3.12.10-$arch.exe"
             try {
                 Say "Downloading Python 3.12 from python.org ($arch)..." "Cyan"
                 Invoke-WebRequest -Uri $pyUrl -OutFile $pyExe -UseBasicParsing
                 Say "Installing Python (per-user, silent)..." "Cyan"
                 $p = Start-Process -FilePath $pyExe -ArgumentList "/quiet", "InstallAllUsers=0", "PrependPath=1", "Include_launcher=1", "Include_test=0", "Include_doc=0" -Wait -PassThru
-                if ($p.ExitCode -ne 0) { Say "Python installer exited with code $($p.ExitCode)." "Yellow" }
+                switch ($p.ExitCode) {
+                    0       { }
+                    3010    { Say "Python installed (a restart is recommended but not required)." "Yellow" }
+                    1638    { Say "Python reports it is already installed; locating it..." "Yellow" }
+                    default { Say "Python installer exited with code $($p.ExitCode)." "Yellow" }
+                }
             } catch {
                 Say "Could not download/run the Python installer: $($_.Exception.Message)" "Red"
             } finally {
@@ -111,12 +149,19 @@ function Install-PrivateDesk {
         }
 
         if (-not $Py) {
-            Say "Python could not be installed automatically." "Red"
-            Say "  1) Download it from https://www.python.org/downloads/ (tick 'Add python.exe to PATH')" "Yellow"
-            Say "  2) Open a NEW PowerShell window and re-run the install command." "Yellow"
+            Say "Python could not be located automatically." "Red"
+            Say "What the installer tried (please send this if you need help):" "Yellow"
+            foreach ($line in $PyTried) { Say "   $line" "DarkGray" }
+            $existing = @(Get-ChildItem -Path "$env:LOCALAPPDATA\Programs\Python", "$env:ProgramFiles\Python*" -Filter python.exe -Recurse -Depth 2 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+            if ($existing.Count -gt 0) {
+                Say "python.exe files found on disk but not usable:" "Yellow"
+                foreach ($e in $existing) { Say "   $e" "DarkGray" }
+            }
+            Say "Fix: open Settings > Apps > Installed apps, remove any 'Python 3.x' entries, then re-run this command." "Yellow"
+            Say "Or install manually from https://www.python.org/downloads/ (tick 'Add python.exe to PATH') and open a NEW PowerShell." "Yellow"
             return
         }
-        Say "Python installed successfully." "Green"
+        Say "Python is ready." "Green"
     }
     Say "Detected Python $($Py.Version) ($($Py.Exe))" "Green"
 
