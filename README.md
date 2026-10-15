@@ -1,8 +1,23 @@
 # 🛡️ PrivateDesk
 
+[![Installer tests](https://github.com/prabhsharan1/PrivateDesk/actions/workflows/install-test.yml/badge.svg)](https://github.com/prabhsharan1/PrivateDesk/actions/workflows/install-test.yml)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue.svg)]()
+[![Model](https://img.shields.io/badge/AI%20Engine-Qwen%202.5%20(Local)-purple.svg)]()
+[![Privacy](https://img.shields.io/badge/Privacy-100%25%20Air--Gapped-success.svg)]()
+
 > **The 100% Private, On-Device AI Terminal Assistant for Any Document.**  
 > Turn your PDFs and PowerPoint presentations into an instant, searchable knowledge base right in your terminal.  
-> Zero cloud calls. No corporate data leaks. Zero API costs. Built for macOS with local Qwen 2.5.
+> Zero cloud calls. No corporate data leaks. Zero API costs. Built for macOS, Windows, and Linux with local Qwen 2.5.
+
+---
+
+## 📺 Live Terminal Walkthrough
+
+<p align="center">
+  <img src="assets/demo_screenshot.png" alt="PrivateDesk Terminal Walkthrough" width="850">
+</p>
+
+*Watch PrivateDesk in action:* **1-line setup $\rightarrow$ Ingesting documents & tables $\rightarrow$ Local Qwen 2.5 thinking $\rightarrow$ Exact page citations $\rightarrow$ Unix pipe mode.**
 
 ---
 
@@ -12,15 +27,17 @@ Whether you are an **IT support technician**, a **software engineer debugging pr
 
 Uploading confidential internal files to cloud AI tools like ChatGPT or Gemini risks breaching corporate policies and data regulations (FIPPA, PIPEDA, HIPAA, GDPR).
 
-**PrivateDesk gives you a personal, Claude Code-style AI co-pilot that runs 100% locally on your Mac:**
-* **100% Offline & Air-Gapped:** Powered by [Ollama](https://ollama.com) running **Qwen 2.5** directly on Apple Silicon Metal GPU. Zero bytes leave your machine.
+**PrivateDesk gives you a personal, Claude Code-style AI co-pilot that runs 100% locally on your machine:**
+* **100% Offline & Air-Gapped:** Powered by [Ollama](https://ollama.com) running **Qwen 2.5** directly on your local GPU / Neural Engine. Zero bytes leave your machine.
+* **Smart Layout & Markdown Tables:** Preserves multi-column reading order and automatically formats PDF and PPTX tables into clean Markdown tables for accurate quantitative reasoning.
 * **Persistent Knowledge Vault:** Drag and drop your PDFs or PowerPoint decks (`.pptx`) once. Documents remain cached locally across all terminal tabs until you clear them.
-* **Mac Clipboard Superpower:** Pipe copied Jira tickets, customer emails, or terminal error logs directly into the bot using `pbpaste | privatedesk`.
+* **Unix Pipe Superpower:** Pipe copied clipboard text, terminal crash logs, or command output directly into the bot using `cat error.log | privatedesk` or `pbpaste | privatedesk`.
 * **Zero Hallucinations & Exact Citations:** Answers are strictly grounded in your uploaded documents, complete with slide- and page-level citations.
 
 ---
 
 ## 🚀 1-Line Installation
+
 
 ### macOS (Terminal)
 ```bash
