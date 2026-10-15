@@ -21,6 +21,9 @@ jobs:
   windows:
     name: Windows / ${{ matrix.shell }} / ${{ matrix.mode }}
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
     strategy:
       fail-fast: false
       matrix:
@@ -30,7 +33,6 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Parse-check PowerShell scripts
-        shell: ${{ matrix.shell }}
         run: |
           $failed = $false
           foreach ($f in "install.ps1", "uninstall.ps1") {
@@ -45,14 +47,12 @@ jobs:
           Write-Host "Both scripts parse cleanly on $($PSVersionTable.PSVersion)"
 
       - name: Run install.ps1
-        shell: ${{ matrix.shell }}
         run: |
           if ("${{ matrix.mode }}" -eq "piped") { Set-Location $env:RUNNER_TEMP }
           Write-Host "PowerShell $($PSVersionTable.PSVersion), cwd: $(Get-Location)"
           Get-Content "$env:GITHUB_WORKSPACE\install.ps1" -Raw | Invoke-Expression
 
       - name: Verify installation
-        shell: ${{ matrix.shell }}
         run: |
           $bin = "$env:USERPROFILE\.privatedesk\bin"
           $wrapper = "$bin\privatedesk.cmd"
@@ -86,7 +86,6 @@ jobs:
           if ($docs -notmatch "ci_sample\.pptx") { Write-Host "::error::Uploaded document not listed by --docs"; exit 1 }
 
       - name: Run uninstall.ps1
-        shell: ${{ matrix.shell }}
         run: |
           Get-Content "$env:GITHUB_WORKSPACE\uninstall.ps1" -Raw | Invoke-Expression
           if (Test-Path "$env:USERPROFILE\.privatedesk") { Write-Host "::error::.privatedesk still exists after uninstall"; exit 1 }
