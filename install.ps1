@@ -91,6 +91,7 @@ function Install-PrivateDesk {
         }
         # 3) Well-known install folders
         $globs = @(
+            "$env:USERPROFILE\.privatedesk\python\python.exe",
             "$env:LOCALAPPDATA\Programs\Python\Python3*\python.exe",
             "$env:ProgramFiles\Python3*\python.exe",
             "${env:ProgramFiles(x86)}\Python3*\python.exe"
@@ -149,6 +150,38 @@ function Install-PrivateDesk {
             Refresh-SessionPath
             $Py = Find-Python
         }
+
+        # Attempt 3: Zero-installer portable Python package.
+        # Required for enterprise, school, or corporate managed laptops where WiX/Burn installer .exe
+        # files are blocked with exit code -2147024891 (0x80070005: Access Denied).
+        if (-not $Py) {
+            Say "Standard installer was blocked (common on managed company/school laptops)." "Yellow"
+            Say "Downloading zero-admin portable Python 3.12 (no installer required)..." "Cyan"
+            $pkgName = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "pythonarm64" } else { "python" }
+            $pkgUrl = "https://www.nuget.org/api/v2/package/$pkgName/3.12.8"
+            $zipPath = "$env:TEMP\python-portable.zip"
+            $extractDir = "$env:TEMP\python-portable-extract"
+            $targetDir = "$env:USERPROFILE\.privatedesk\python"
+            try {
+                Invoke-WebRequest -Uri $pkgUrl -OutFile $zipPath -UseBasicParsing
+                if (Test-Path $extractDir) { Remove-Item -Path $extractDir -Recurse -Force -ErrorAction SilentlyContinue }
+                Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+                if (Test-Path "$extractDir\tools\python.exe") {
+                    if (Test-Path $targetDir) { Remove-Item -Path $targetDir -Recurse -Force -ErrorAction SilentlyContinue }
+                    New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+                    Copy-Item -Path "$extractDir\tools\*" -Destination $targetDir -Recurse -Force
+                    Say "Portable Python extracted to $targetDir." "Green"
+                }
+            } catch {
+                Say "Could not extract portable Python: $($_.Exception.Message)" "Yellow"
+            } finally {
+                Remove-Item -Path $zipPath -Force -ErrorAction SilentlyContinue
+                Remove-Item -Path $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            Refresh-SessionPath
+            $Py = Find-Python
+        }
+
 
         if (-not $Py) {
             Say "Python could not be located automatically." "Red"
