@@ -22,6 +22,8 @@ say "${CYAN}==========================================================${RESET}"
 
 # Prompt that also works when the script itself is piped through `curl | bash`
 ask_permission() {
+    # Unattended mode (CI / scripted installs): PRIVATEDESK_YES=1 answers "yes" to every prompt.
+    [ "${PRIVATEDESK_YES:-}" = "1" ] && return 0
     local prompt_msg="$1" default_ans="${2:-y}" reply=""
     if [ -t 0 ]; then
         read -r -p "$prompt_msg " reply
@@ -154,7 +156,8 @@ say "${CYAN}📦 Installing dependencies (pypdf, python-pptx, requests)...${RESE
 
 # ------------------------------------------------------------------ 5. Ollama + model
 say "${CYAN}🧠 Checking local AI engine...${RESET}"
-if ! command -v ollama >/dev/null 2>&1; then
+# PRIVATEDESK_SKIP_OLLAMA=1 skips the Ollama install + model download (used by CI).
+if [ "${PRIVATEDESK_SKIP_OLLAMA:-}" != "1" ] && ! command -v ollama >/dev/null 2>&1; then
     say "${YELLOW}⚠️ Ollama is required for 100% offline, on-device AI.${RESET}"
     if ask_permission "Install Ollama automatically? [Y/n]"; then
         if command -v brew >/dev/null 2>&1; then
@@ -170,8 +173,11 @@ if ! command -v ollama >/dev/null 2>&1; then
     fi
 fi
 
-OLLAMA_BIN="$(command -v ollama || true)"
-[ -z "$OLLAMA_BIN" ] && [ -x "/Applications/Ollama.app/Contents/Resources/ollama" ] && OLLAMA_BIN="/Applications/Ollama.app/Contents/Resources/ollama"
+OLLAMA_BIN=""
+if [ "${PRIVATEDESK_SKIP_OLLAMA:-}" != "1" ]; then
+    OLLAMA_BIN="$(command -v ollama || true)"
+    [ -z "$OLLAMA_BIN" ] && [ -x "/Applications/Ollama.app/Contents/Resources/ollama" ] && OLLAMA_BIN="/Applications/Ollama.app/Contents/Resources/ollama"
+fi
 
 if [ -n "$OLLAMA_BIN" ]; then
     say "${GREEN}✔ Found Ollama.${RESET} Making sure Qwen 2.5 (1.5B) is ready..."

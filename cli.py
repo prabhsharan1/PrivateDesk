@@ -404,15 +404,7 @@ def main():
     retriever = DocumentRetriever(persistent=True)
     engine = LLMEngine()
 
-    # Mode 1: Pipe / Stdin Mode (e.g. pbpaste | privatedesk)
-    if not sys.stdin.isatty():
-        piped_input = sys.stdin.read().strip()
-        additional_query = " ".join(sys.argv[1:]).strip()
-        combined_query = f"{additional_query}\n\nContext from input:\n{piped_input}" if additional_query else piped_input
-        answer_query(combined_query, retriever, engine)
-        sys.exit(0)
-
-    # Mode 2: Command-Line Flags
+    # Mode 1: Command-Line Flags (always take priority, even when stdin is not a terminal)
     if len(sys.argv) > 1:
         first_arg = sys.argv[1]
         if first_arg in ["--help", "-h"]:
@@ -437,11 +429,19 @@ def main():
             else:
                 print(f"{YELLOW}Usage: privatedesk --upload <path-to-file>{RESET}")
             sys.exit(0)
-        else:
-            # Mode 3: One-shot CLI query: privatedesk "What is the policy?"
-            one_shot_query = " ".join(sys.argv[1:])
-            answer_query(one_shot_query, retriever, engine)
-            sys.exit(0)
+
+    # Mode 2: Pipe / Stdin Mode (e.g. pbpaste | privatedesk "Explain this")
+    if not sys.stdin.isatty():
+        piped_input = sys.stdin.read().strip()
+        additional_query = " ".join(sys.argv[1:]).strip()
+        combined_query = f"{additional_query}\n\nContext from input:\n{piped_input}" if additional_query and piped_input else (additional_query or piped_input)
+        answer_query(combined_query, retriever, engine)
+        sys.exit(0)
+
+    # Mode 3: One-shot CLI query: privatedesk "What is the policy?"
+    if len(sys.argv) > 1:
+        answer_query(" ".join(sys.argv[1:]), retriever, engine)
+        sys.exit(0)
 
     # Mode 4: Interactive REPL Mode
     run_repl(retriever, engine)

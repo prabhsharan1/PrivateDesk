@@ -21,6 +21,8 @@ function Install-PrivateDesk {
         $env:Path = (@($user, $machine) | Where-Object { $_ }) -join ";"
     }
     function Ask-YesNo($question) {
+        # Unattended mode (CI / scripted installs): PRIVATEDESK_YES=1 answers "yes" to every prompt.
+        if ($env:PRIVATEDESK_YES -eq "1") { return $true }
         $reply = Read-Host "$question [Y/n]"
         return ($reply -eq "" -or $reply -match "^[Yy]")
     }
@@ -250,8 +252,11 @@ function Install-PrivateDesk {
         if (Test-Path $p) { return $p }
         return $null
     }
-    $Ollama = Find-Ollama
-    if (-not $Ollama) {
+    # PRIVATEDESK_SKIP_OLLAMA=1 skips the Ollama install + model download (used by CI).
+    $SkipOllama = ($env:PRIVATEDESK_SKIP_OLLAMA -eq "1")
+    $Ollama = $null
+    if (-not $SkipOllama) { $Ollama = Find-Ollama }
+    if (-not $Ollama -and -not $SkipOllama) {
         Say "Ollama is required for 100% offline, on-device AI." "Yellow"
         if (Ask-YesNo "Install Ollama automatically?") {
             $installed = $false

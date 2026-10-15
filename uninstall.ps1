@@ -10,7 +10,7 @@ function Uninstall-PrivateDesk {
     Write-Host "  Uninstalling PrivateDesk CLI (Windows)" -ForegroundColor Yellow
     Write-Host "==========================================================" -ForegroundColor Cyan
 
-    $confirmation = Read-Host "Completely remove PrivateDesk, its virtual environment and cached documents? [y/N]"
+    $confirmation = if ($env:PRIVATEDESK_YES -eq "1") { "y" } else { Read-Host "Completely remove PrivateDesk, its virtual environment and cached documents? [y/N]" }
     if ($confirmation -notmatch "^[Yy]") {
         Write-Host "Uninstallation cancelled." -ForegroundColor Yellow
         return

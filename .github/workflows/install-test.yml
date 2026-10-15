@@ -1,0 +1,174 @@
+name: Installer tests
+
+# Verifies the one-line installers end-to-end on clean GitHub-hosted machines:
+#   install -> launcher on PATH -> upload a document -> list it -> uninstall.
+# Ollama is skipped in CI (multi-GB model); the AI step is covered by test_suite.py locally.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  PRIVATEDESK_YES: "1"          # auto-answer installer prompts
+  PRIVATEDESK_SKIP_OLLAMA: "1"  # don't install Ollama / pull the model in CI
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Windows: both Windows PowerShell 5.1 (what most users have) and PowerShell 7
+  # ---------------------------------------------------------------------------
+  windows:
+    name: Windows / ${{ matrix.shell }} / ${{ matrix.mode }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [powershell, pwsh]       # powershell = Windows PowerShell 5.1
+        mode: [local, piped]            # local = run from the repo, piped = like `irm | iex` from an empty folder
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse-check PowerShell scripts
+        shell: ${{ matrix.shell }}
+        run: |
+          $failed = $false
+          foreach ($f in "install.ps1", "uninstall.ps1") {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile("$env:GITHUB_WORKSPACE\$f", [ref]$null, [ref]$errors)
+            foreach ($e in $errors) {
+              Write-Host "::error file=$f,line=$($e.Extent.StartLineNumber)::$($e.Message)"
+              $failed = $true
+            }
+          }
+          if ($failed) { exit 1 }
+          Write-Host "Both scripts parse cleanly on $($PSVersionTable.PSVersion)"
+
+      - name: Run install.ps1
+        shell: ${{ matrix.shell }}
+        run: |
+          if ("${{ matrix.mode }}" -eq "piped") { Set-Location $env:RUNNER_TEMP }
+          Write-Host "PowerShell $($PSVersionTable.PSVersion), cwd: $(Get-Location)"
+          Get-Content "$env:GITHUB_WORKSPACE\install.ps1" -Raw | Invoke-Expression
+
+      - name: Verify installation
+        shell: ${{ matrix.shell }}
+        run: |
+          $bin = "$env:USERPROFILE\.privatedesk\bin"
+          $wrapper = "$bin\privatedesk.cmd"
+          $venvPy = "$env:USERPROFILE\.privatedesk\venv\Scripts\python.exe"
+          foreach ($p in $wrapper, $venvPy) {
+            if (-not (Test-Path $p)) { Write-Host "::error::Missing $p"; exit 1 }
+          }
+          $userPath = [Environment]::GetEnvironmentVariable("Path", "User") -split ";"
+          if ($userPath -notcontains $bin) { Write-Host "::error::$bin not on the User PATH"; exit 1 }
+
+          & $wrapper --version
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::privatedesk --version failed"; exit 1 }
+
+          # Build a tiny deck, upload it through the real CLI, and make sure it is indexed.
+          $work = Join-Path $env:RUNNER_TEMP "pd-smoke"
+          New-Item -ItemType Directory -Path $work -Force | Out-Null
+          @'
+          from pptx import Presentation
+          p = Presentation()
+          s = p.slides.add_slide(p.slide_layouts[1])
+          s.shapes.title.text = "Laptop Loans"
+          s.placeholders[1].text = "Loans last seven days"
+          p.save("ci_sample.pptx")
+          '@ | Set-Content -Path "$work\make.py" -Encoding ascii
+          Push-Location $work
+          & $venvPy make.py
+          & $wrapper --upload "$work\ci_sample.pptx"
+          $docs = (& $wrapper --docs | Out-String)
+          Pop-Location
+          Write-Host $docs
+          if ($docs -notmatch "ci_sample\.pptx") { Write-Host "::error::Uploaded document not listed by --docs"; exit 1 }
+
+      - name: Run uninstall.ps1
+        shell: ${{ matrix.shell }}
+        run: |
+          Get-Content "$env:GITHUB_WORKSPACE\uninstall.ps1" -Raw | Invoke-Expression
+          if (Test-Path "$env:USERPROFILE\.privatedesk") { Write-Host "::error::.privatedesk still exists after uninstall"; exit 1 }
+          $userPath = [Environment]::GetEnvironmentVariable("Path", "User") -split ";"
+          if ($userPath -contains "$env:USERPROFILE\.privatedesk\bin") { Write-Host "::error::PATH entry left behind"; exit 1 }
+          Write-Host "Uninstall left nothing behind."
+
+  # ---------------------------------------------------------------------------
+  # Windows, with Python hidden from PATH (best effort: exercises detection via
+  # registry / known folders, and the winget / python.org install fallback).
+  # ---------------------------------------------------------------------------
+  windows-python-hidden:
+    name: Windows / Python hidden from PATH
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install with Python removed from PATH
+        shell: powershell
+        run: |
+          $env:Path = ($env:Path -split ";" | Where-Object { $_ -and $_ -notmatch "(?i)python" }) -join ";"
+          Write-Host "python on PATH now: $([bool](Get-Command python -ErrorAction SilentlyContinue))"
+          Set-Location $env:RUNNER_TEMP
+          Get-Content "$env:GITHUB_WORKSPACE\install.ps1" -Raw | Invoke-Expression
+      - name: Verify launcher works
+        shell: powershell
+        run: |
+          $wrapper = "$env:USERPROFILE\.privatedesk\bin\privatedesk.cmd"
+          if (-not (Test-Path $wrapper)) { Write-Host "::error::Installer did not produce $wrapper"; exit 1 }
+          & $wrapper --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+  # ---------------------------------------------------------------------------
+  # macOS + Linux
+  # ---------------------------------------------------------------------------
+  unix:
+    name: ${{ matrix.os }} / ${{ matrix.mode }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+        mode: [local, piped]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax-check shell scripts and Python
+        run: |
+          bash -n install.sh
+          bash -n uninstall.sh
+          python3 -m py_compile cli.py llm_engine.py storage.py parser.py retriever.py
+
+      - name: Run install.sh
+        run: |
+          if [ "${{ matrix.mode }}" = "piped" ]; then cd "$RUNNER_TEMP"; fi
+          echo "cwd: $(pwd)"
+          cat "$GITHUB_WORKSPACE/install.sh" | bash
+
+      - name: Verify installation
+        run: |
+          WRAPPER="$HOME/.local/bin/privatedesk"
+          test -x "$WRAPPER" || { echo "::error::Missing $WRAPPER"; exit 1; }
+          grep -qF '.local/bin' "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" 2>/dev/null \
+            || { echo "::error::PATH entry not written to any shell rc file"; exit 1; }
+
+          "$WRAPPER" --version
+
+          WORK="$RUNNER_TEMP/pd-smoke"; mkdir -p "$WORK"; cd "$WORK"
+          "$HOME/.privatedesk/venv/bin/python" - <<'PY'
+          from pptx import Presentation
+          p = Presentation()
+          s = p.slides.add_slide(p.slide_layouts[1])
+          s.shapes.title.text = "Laptop Loans"
+          s.placeholders[1].text = "Loans last seven days"
+          p.save("ci_sample.pptx")
+          PY
+          "$WRAPPER" --upload "$WORK/ci_sample.pptx"
+          DOCS="$("$WRAPPER" --docs)"
+          echo "$DOCS"
+          echo "$DOCS" | grep -q "ci_sample.pptx" || { echo "::error::Uploaded document not listed by --docs"; exit 1; }
+
+      - name: Run uninstall.sh
+        run: |
+          cat "$GITHUB_WORKSPACE/uninstall.sh" | bash
+          test ! -e "$HOME/.privatedesk" || { echo "::error::.privatedesk still exists after uninstall"; exit 1; }
+          test ! -e "$HOME/.local/bin/privatedesk" || { echo "::error::launcher still exists after uninstall"; exit 1; }

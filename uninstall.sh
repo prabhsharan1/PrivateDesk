@@ -19,7 +19,9 @@ echo -e "${CYAN}==========================================================${RESE
 
 # Confirm with the user (works even when piped through `curl | bash`)
 REPLY=""
-if [ -t 0 ]; then
+if [ "${PRIVATEDESK_YES:-}" = "1" ]; then
+    REPLY="y"
+elif [ -t 0 ]; then
     read -r -p "Completely remove PrivateDesk and its local cache? [y/N] " REPLY
 elif [ -r /dev/tty ]; then
     read -r -p "Completely remove PrivateDesk and its local cache? [y/N] " REPLY < /dev/tty || REPLY=""
