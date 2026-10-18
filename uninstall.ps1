@@ -1,5 +1,5 @@
 # ==============================================================================
-# PrivateDesk — 1-Line Terminal CLI Uninstaller for Windows (PowerShell)
+# PrivateDesk -- 1-Line Terminal CLI Uninstaller for Windows (PowerShell 5.1+ / 7+)
 #   irm https://raw.githubusercontent.com/prabhsharan1/PrivateDesk/main/uninstall.ps1 | iex
 # ==============================================================================
 
@@ -7,7 +7,7 @@ function Uninstall-PrivateDesk {
     $ErrorActionPreference = "Continue"
 
     Write-Host "==========================================================" -ForegroundColor Cyan
-    Write-Host "  🗑️  PrivateDesk Uninstallation Manager (Windows)" -ForegroundColor Yellow
+    Write-Host "  PrivateDesk Uninstallation Manager (Windows)" -ForegroundColor Yellow
     Write-Host "==========================================================" -ForegroundColor Cyan
 
     $HomeDir = $env:USERPROFILE
@@ -47,21 +47,21 @@ function Uninstall-PrivateDesk {
         Write-Host "Please select an uninstallation option:"
         Write-Host ""
         Write-Host "  [1] Complete / Everything" -ForegroundColor White
-        Write-Host "      • Remove PrivateDesk application & launcher" -ForegroundColor Gray
-        Write-Host "      • Remove Python virtual environment & dependencies" -ForegroundColor Gray
-        Write-Host "      • Remove Knowledge Vault & document cache" -ForegroundColor Gray
-        Write-Host "      • Remove Qwen 2.5 AI model from Ollama (frees ~1GB)" -ForegroundColor Gray
-        Write-Host "      • Uninstall Ollama application" -ForegroundColor Gray
+        Write-Host "      * Remove PrivateDesk application & launcher" -ForegroundColor Gray
+        Write-Host "      * Remove Python virtual environment & dependencies" -ForegroundColor Gray
+        Write-Host "      * Remove Knowledge Vault & document cache" -ForegroundColor Gray
+        Write-Host "      * Remove Qwen 2.5 AI model from Ollama (frees ~1GB)" -ForegroundColor Gray
+        Write-Host "      * Uninstall Ollama application" -ForegroundColor Gray
         if (Test-Path $PortablePy) {
-            Write-Host "      • Remove PrivateDesk portable Python" -ForegroundColor Gray
+            Write-Host "      * Remove PrivateDesk portable Python" -ForegroundColor Gray
         }
         Write-Host ""
         Write-Host "  [2] PrivateDesk Only (Keep Ollama & AI Models) [Default]" -ForegroundColor White
-        Write-Host "      • Remove PrivateDesk app, launcher, venv, and cache" -ForegroundColor Gray
-        Write-Host "      • Preserves Ollama and AI models for other applications" -ForegroundColor Gray
+        Write-Host "      * Remove PrivateDesk app, launcher, venv, and cache" -ForegroundColor Gray
+        Write-Host "      * Preserves Ollama and AI models for other applications" -ForegroundColor Gray
         Write-Host ""
         Write-Host "  [3] Custom / Selective Uninstall" -ForegroundColor White
-        Write-Host "      • Choose individually what to delete or keep" -ForegroundColor Gray
+        Write-Host "      * Choose individually what to delete or keep" -ForegroundColor Gray
         Write-Host ""
         Write-Host "  [4] Cancel" -ForegroundColor White
         Write-Host ""
@@ -133,7 +133,7 @@ function Uninstall-PrivateDesk {
         Write-Host "Removing Qwen 2.5 AI model from Ollama..." -ForegroundColor Cyan
         & $OllamaExe rm qwen2.5:1.5b 2>$null
         & $OllamaExe rm qwen2.5:1.5b-instruct 2>$null
-        Write-Host "✔ Removed Qwen 2.5 AI model." -ForegroundColor Green
+        Write-Host "[OK] Removed Qwen 2.5 AI model." -ForegroundColor Green
     }
 
     # 2. Uninstall Ollama Application
@@ -155,7 +155,7 @@ function Uninstall-PrivateDesk {
         if (Test-Path "$env:USERPROFILE\.ollama") {
             Remove-Item -Path "$env:USERPROFILE\.ollama" -Recurse -Force -ErrorAction SilentlyContinue
         }
-        Write-Host "✔ Removed Ollama application & models." -ForegroundColor Green
+        Write-Host "[OK] Removed Ollama application and models." -ForegroundColor Green
     }
 
     # 3. Remove executable & User PATH
@@ -171,31 +171,31 @@ function Uninstall-PrivateDesk {
         $env:Path = ($env:Path -split ";" | Where-Object { $_ -and $_ -ne $BinDir }) -join ";"
         if (Test-Path $BinDir) {
             Remove-Item -Path $BinDir -Recurse -Force -ErrorAction SilentlyContinue
-            Write-Host "✔ Removed launcher executable: $BinDir" -ForegroundColor Green
+            Write-Host "[OK] Removed launcher executable: $BinDir" -ForegroundColor Green
         }
         if (Test-Path $AppDir) {
             Remove-Item -Path $AppDir -Recurse -Force -ErrorAction SilentlyContinue
-            Write-Host "✔ Removed application files: $AppDir" -ForegroundColor Green
+            Write-Host "[OK] Removed application files: $AppDir" -ForegroundColor Green
         }
     }
 
     # 4. Remove Python virtual environment and dependencies
     if ($RemoveVenv -and (Test-Path $VenvDir)) {
         Remove-Item -Path $VenvDir -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host "✔ Removed Python virtual environment & dependencies: $VenvDir" -ForegroundColor Green
+        Write-Host "[OK] Removed Python virtual environment and dependencies: $VenvDir" -ForegroundColor Green
     }
 
     # 5. Remove PrivateDesk portable Python
     if ($RemovePortablePy -and (Test-Path $PortablePy)) {
         Remove-Item -Path $PortablePy -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host "✔ Removed PrivateDesk portable Python: $PortablePy" -ForegroundColor Green
+        Write-Host "[OK] Removed PrivateDesk portable Python: $PortablePy" -ForegroundColor Green
     }
 
     # 6. Remove Knowledge Vault and document cache
     if ($RemoveCache) {
         if (Test-Path $StoreJson) {
             Remove-Item -Path $StoreJson -Force -ErrorAction SilentlyContinue
-            Write-Host "✔ Removed Knowledge Vault cache: $StoreJson" -ForegroundColor Green
+            Write-Host "[OK] Removed Knowledge Vault cache: $StoreJson" -ForegroundColor Green
         }
         if (Test-Path "$PrivateDeskHome\data") {
             Remove-Item -Path "$PrivateDeskHome\data" -Recurse -Force -ErrorAction SilentlyContinue
@@ -209,13 +209,13 @@ function Uninstall-PrivateDesk {
             if (Test-Path $PrivateDeskHome) {
                 Write-Host "Some files in $PrivateDeskHome are still in use. Close open terminals and re-run." -ForegroundColor Yellow
             } else {
-                Write-Host "✔ Removed: $PrivateDeskHome" -ForegroundColor Green
+                Write-Host "[OK] Removed: $PrivateDeskHome" -ForegroundColor Green
             }
         } else {
             $remaining = Get-ChildItem -Path $PrivateDeskHome -Force -ErrorAction SilentlyContinue
             if (-not $remaining) {
                 Remove-Item -Path $PrivateDeskHome -Recurse -Force -ErrorAction SilentlyContinue
-                Write-Host "✔ Removed empty directory: $PrivateDeskHome" -ForegroundColor Green
+                Write-Host "[OK] Removed empty directory: $PrivateDeskHome" -ForegroundColor Green
             }
         }
     }
@@ -227,7 +227,7 @@ function Uninstall-PrivateDesk {
     }
 
     Write-Host "==========================================================" -ForegroundColor Cyan
-    Write-Host "  🎉 Uninstallation complete." -ForegroundColor Green
+    Write-Host "  Uninstallation complete." -ForegroundColor Green
     Write-Host "==========================================================" -ForegroundColor Cyan
     if (-not $RemoveOllama -and -not $RemoveModel) {
         Write-Host "Note: Ollama and your AI models were preserved for other applications." -ForegroundColor Gray
