@@ -262,7 +262,7 @@ In macOS Terminal, you can **drag and drop any PDF or PPTX file directly from Fi
 | **`/docs`** or **`/list`** | View all currently loaded documents, slide/page counts, and total chunks. |
 | **`clear`** or **`cls`** | Clear the terminal screen (leaves your vault documents intact). |
 | **`/reset`** or **`/purge`** | Purge loaded documents from cache (with safety confirmation prompt). |
-| **`/uninstall`** | Completely remove PrivateDesk, its virtual environment, and all cached data. |
+| **`/uninstall`** | Uninstall PrivateDesk (with options for complete wipe or selective component removal). |
 | **`/help`** | Display command reference and usage shortcuts. |
 | **`/exit`** or **`exit`** | Exit PrivateDesk (or press `Ctrl + D`). |
 
@@ -273,7 +273,7 @@ In macOS Terminal, you can **drag and drop any PDF or PPTX file directly from Fi
 | **`privatedesk --upload <files...>`** | Batch upload and index files or directories from command line. |
 | **`privatedesk --docs`** | Display list of indexed documents in the vault. |
 | **`privatedesk --reset`** | Wipe all indexed documents from cache without interactive prompts. |
-| **`privatedesk --uninstall`** | Completely uninstall PrivateDesk and purge all local files. |
+| **`privatedesk --uninstall`** | Launch interactive uninstaller (complete or selective). |
 | **`privatedesk --help`** | Display help and flag reference. |
 | **`privatedesk --version`** | Display current CLI version. |
 
@@ -281,7 +281,7 @@ In macOS Terminal, you can **drag and drop any PDF or PPTX file directly from Fi
 
 ## 🗑️ 1-Line Uninstallation
 
-Need to completely remove PrivateDesk, its virtual environment, and cached documents from your machine?
+Need to remove PrivateDesk from your system? You can choose between a **Complete Wipe**, **PrivateDesk Only**, or a **Selective / Custom** uninstallation.
 
 ### Option 1: Direct CLI Command
 ```bash
@@ -301,11 +301,20 @@ curl -fsSL https://raw.githubusercontent.com/prabhsharan1/PrivateDesk/main/unins
 irm https://raw.githubusercontent.com/prabhsharan1/PrivateDesk/main/uninstall.ps1 | iex
 ```
 
-### What the uninstaller cleans up:
-1. Deletes the application files and virtual environment (`~/.privatedesk`).
-2. Removes all cached document indexes and metadata (`~/.privatedesk/store.json`).
-3. Deletes global executable wrappers (`~/.local/bin/privatedesk` or `privatedesk.cmd`).
-4. Cleans up PATH entries from `~/.zshrc` / `~/.bashrc` or Windows User Environment Variables.
+### Uninstallation Modes:
+When prompted, you can select:
+1. **Complete / Everything:**
+   * Removes PrivateDesk application files and launcher scripts.
+   * Removes isolated Python virtual environment & dependencies (`~/.privatedesk/venv`).
+   * Purges Knowledge Vault and document caches (`~/.privatedesk/store.json`).
+   * Removes the local Qwen 2.5 AI model from Ollama (`ollama rm qwen2.5:1.5b`, freeing ~1GB).
+   * Uninstalls the Ollama application.
+   * (Windows) Removes PrivateDesk portable Python if installed.
+2. **PrivateDesk Only (Default):**
+   * Removes PrivateDesk code, launcher, virtual environment, and cached documents.
+   * Preserves Ollama and your local AI models so other tools can continue using them.
+3. **Custom / Selective:**
+   * Choose individually component-by-component what to remove and what to keep.
 
 ---
 

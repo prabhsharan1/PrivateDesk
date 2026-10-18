@@ -254,47 +254,204 @@ def handle_purge(retriever: DocumentRetriever, force: bool = False):
 
 
 def handle_uninstall():
-    """Uninstalls PrivateDesk and removes ~/.privatedesk, wrappers, and caches."""
+    """Interactive uninstaller supporting complete or selective component removal."""
     if os.name == "nt":
-        print(f"{YELLOW}Windows can't delete files while PrivateDesk is running.{RESET}")
-        print("Exit this window, open PowerShell and run:")
+        print(f"\n{YELLOW}Windows locks active executables while PrivateDesk is running.{RESET}")
+        print("To uninstall PrivateDesk (with options for Python, dependencies, Ollama & Qwen):")
         print(f"  {CYAN}irm https://raw.githubusercontent.com/prabhsharan1/PrivateDesk/main/uninstall.ps1 | iex{RESET}\n")
+        try:
+            launch = input("Launch the PowerShell uninstaller now? [Y/n]: ").strip().lower()
+            if launch in ["", "y", "yes"]:
+                import subprocess
+                subprocess.Popen([
+                    "powershell.exe",
+                    "-ExecutionPolicy", "Bypass",
+                    "-Command",
+                    "Start-Sleep -Seconds 1; irm https://raw.githubusercontent.com/prabhsharan1/PrivateDesk/main/uninstall.ps1 | iex"
+                ])
+                sys.exit(0)
+        except Exception:
+            pass
         return
+
+    print(f"\n{CYAN}=========================================================={RESET}")
+    print(f"{BOLD}  🗑️  PrivateDesk Uninstallation Manager{RESET}")
+    print(f"{CYAN}=========================================================={RESET}")
+    print("\nPlease choose an uninstallation option:\n")
+    print(f"  {BOLD}[1] Complete / Everything{RESET}")
+    print(f"      • Remove PrivateDesk application & launcher")
+    print(f"      • Remove Python virtual environment & dependencies")
+    print(f"      • Remove Knowledge Vault & document cache")
+    print(f"      • Remove Qwen 2.5 AI model from Ollama (frees ~1GB)")
+    print(f"      • Uninstall Ollama application\n")
+    print(f"  {BOLD}[2] PrivateDesk Only{RESET} {DIM}(Keep Ollama & AI Models){RESET}  {CYAN}[Default]{RESET}")
+    print(f"      • Remove PrivateDesk app, launcher, venv, and cache")
+    print(f"      • Preserves Ollama and AI models for other applications\n")
+    print(f"  {BOLD}[3] Custom / Selective Uninstall{RESET}")
+    print(f"      • Choose individually what to delete or keep\n")
+    print(f"  {BOLD}[4] Cancel{RESET}\n")
+
     try:
-        confirm = input(
-            f"{YELLOW}⚠️ This will completely remove PrivateDesk, its virtual environment, and cached documents.\n"
-            f"   Are you sure you want to uninstall PrivateDesk? [y/N]: {RESET}"
-        ).strip().lower()
-        if confirm not in ["y", "yes"]:
-            print(f"{DIM}Uninstallation cancelled.{RESET}\n")
-            return
+        choice = input(f"{BOLD}Enter choice [1-4] (default: 2): {RESET}").strip()
     except (KeyboardInterrupt, EOFError):
         print(f"\n{DIM}Uninstallation cancelled.{RESET}\n")
         return
 
-    home = Path.home()
-    
-    # 1. Remove binary wrappers
-    bin_wrapper = home / ".local" / "bin" / "privatedesk"
-    if bin_wrapper.exists():
-        bin_wrapper.unlink()
-        print(f"{GREEN}✔ Removed executable:{RESET} {bin_wrapper}")
+    if not choice:
+        choice = "2"
 
-    usr_local_wrapper = Path("/usr/local/bin/privatedesk")
-    if usr_local_wrapper.exists() or usr_local_wrapper.is_symlink():
+    remove_app = False
+    remove_venv = False
+    remove_cache = False
+    remove_model = False
+    remove_ollama = False
+
+    if choice in ["1", "all"]:
         try:
-            usr_local_wrapper.unlink()
-            print(f"{GREEN}✔ Removed symlink:{RESET} {usr_local_wrapper}")
+            confirm = input(
+                f"{YELLOW}⚠️ This will remove PrivateDesk, dependencies, Qwen model, and Ollama.\n"
+                f"   Proceed with complete uninstall? [y/N]: {RESET}"
+            ).strip().lower()
+            if confirm not in ["y", "yes"]:
+                print(f"{DIM}Uninstallation cancelled.{RESET}\n")
+                return
+        except (KeyboardInterrupt, EOFError):
+            print(f"\n{DIM}Uninstallation cancelled.{RESET}\n")
+            return
+        remove_app = True
+        remove_venv = True
+        remove_cache = True
+        remove_model = True
+        remove_ollama = True
+
+    elif choice in ["2", "default"]:
+        try:
+            confirm = input(
+                f"{YELLOW}Remove PrivateDesk, its virtual environment and cached documents? [y/N]: {RESET}"
+            ).strip().lower()
+            if confirm not in ["y", "yes"]:
+                print(f"{DIM}Uninstallation cancelled.{RESET}\n")
+                return
+        except (KeyboardInterrupt, EOFError):
+            print(f"\n{DIM}Uninstallation cancelled.{RESET}\n")
+            return
+        remove_app = True
+        remove_venv = True
+        remove_cache = True
+
+    elif choice in ["3", "custom", "selective"]:
+        print(f"\n{CYAN}Select components to remove:{RESET}")
+        try:
+            ans = input("  Remove PrivateDesk application and CLI launcher? [Y/n]: ").strip().lower()
+            remove_app = ans not in ["n", "no"]
+
+            ans = input("  Remove Python virtual environment & dependencies (~/.privatedesk/venv)? [Y/n]: ").strip().lower()
+            remove_venv = ans not in ["n", "no"]
+
+            ans = input("  Remove Knowledge Vault & document cache (store.json)? [Y/n]: ").strip().lower()
+            remove_cache = ans not in ["n", "no"]
+
+            ans = input("  Remove Qwen 2.5 AI model from Ollama (frees ~1GB)? [y/N]: ").strip().lower()
+            remove_model = ans in ["y", "yes"]
+
+            ans = input("  Uninstall Ollama application entirely? [y/N]: ").strip().lower()
+            remove_ollama = ans in ["y", "yes"]
+        except (KeyboardInterrupt, EOFError):
+            print(f"\n{DIM}Uninstallation cancelled.{RESET}\n")
+            return
+    else:
+        print(f"{DIM}Uninstallation cancelled.{RESET}\n")
+        return
+
+    import subprocess
+    home = Path.home()
+
+    # 1. Remove Qwen model
+    if remove_model:
+        print(f"\n{CYAN}⚙️ Removing Qwen 2.5 AI model from Ollama...{RESET}")
+        try:
+            subprocess.run(["ollama", "rm", "qwen2.5:1.5b"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["ollama", "rm", "qwen2.5:1.5b-instruct"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print(f"{GREEN}✔ Removed Qwen 2.5 AI model from Ollama.{RESET}")
         except Exception:
             pass
 
-    # 2. Remove ~/.privatedesk directory (contains venv, app, cache)
+    # 2. Uninstall Ollama
+    if remove_ollama:
+        print(f"{CYAN}⚙️ Uninstalling Ollama application...{RESET}")
+        try:
+            subprocess.run(["pkill", "-f", "Ollama"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if sys.platform == "darwin":
+                subprocess.run(["brew", "uninstall", "--cask", "ollama"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                ollama_app = Path("/Applications/Ollama.app")
+                if ollama_app.exists():
+                    shutil.rmtree(ollama_app, ignore_errors=True)
+            ollama_dir = home / ".ollama"
+            if ollama_dir.exists():
+                shutil.rmtree(ollama_dir, ignore_errors=True)
+            print(f"{GREEN}✔ Removed Ollama application & models.{RESET}")
+        except Exception:
+            pass
+
+    # 3. Remove launchers & PATH
+    if remove_app:
+        bin_wrapper = home / ".local" / "bin" / "privatedesk"
+        if bin_wrapper.exists():
+            bin_wrapper.unlink()
+            print(f"{GREEN}✔ Removed executable:{RESET} {bin_wrapper}")
+
+        usr_local_wrapper = Path("/usr/local/bin/privatedesk")
+        if usr_local_wrapper.exists() or usr_local_wrapper.is_symlink():
+            try:
+                usr_local_wrapper.unlink()
+                print(f"{GREEN}✔ Removed symlink:{RESET} {usr_local_wrapper}")
+            except Exception:
+                pass
+
+        for rc_name in [".zshrc", ".bashrc", ".bash_profile", ".profile"]:
+            rc_path = home / rc_name
+            if rc_path.exists():
+                try:
+                    lines = rc_path.read_text(encoding="utf-8").splitlines()
+                    filtered = [l for l in lines if "PrivateDesk CLI" not in l and '.local/bin' not in l]
+                    if len(filtered) != len(lines):
+                        rc_path.write_text("\n".join(filtered) + "\n", encoding="utf-8")
+                        print(f"{GREEN}✔ Cleaned PATH entry from:{RESET} ~/{rc_name}")
+                except Exception:
+                    pass
+
+        app_dir = home / ".privatedesk" / "app"
+        if app_dir.exists():
+            shutil.rmtree(app_dir, ignore_errors=True)
+
+    # 4. Remove venv & dependencies
+    if remove_venv:
+        venv_dir = home / ".privatedesk" / "venv"
+        if venv_dir.exists():
+            shutil.rmtree(venv_dir, ignore_errors=True)
+            print(f"{GREEN}✔ Removed Python virtual environment & dependencies:{RESET} {venv_dir}")
+
+    # 5. Remove Cache
+    if remove_cache:
+        store_file = home / ".privatedesk" / "store.json"
+        if store_file.exists():
+            store_file.unlink()
+            print(f"{GREEN}✔ Removed Knowledge Vault cache:{RESET} {store_file}")
+        data_dir = home / ".privatedesk" / "data"
+        if data_dir.exists():
+            shutil.rmtree(data_dir, ignore_errors=True)
+
+    # Clean ~/.privatedesk directory if empty or if full wipe
     privatedesk_dir = home / ".privatedesk"
     if privatedesk_dir.exists():
-        shutil.rmtree(privatedesk_dir, ignore_errors=True)
-        print(f"{GREEN}✔ Removed application & cache:{RESET} {privatedesk_dir}")
+        remaining = list(privatedesk_dir.iterdir())
+        if not remaining or (remove_app and remove_venv and remove_cache):
+            shutil.rmtree(privatedesk_dir, ignore_errors=True)
+            print(f"{GREEN}✔ Removed directory:{RESET} {privatedesk_dir}")
 
-    print(f"\n{GREEN}🎉 PrivateDesk has been successfully uninstalled from your system.{RESET}\n")
+    print(f"\n{GREEN}🎉 Uninstallation complete.{RESET}\n")
+    if not remove_ollama and not remove_model:
+        print(f"{DIM}Note: Ollama and your AI models were preserved for other applications.{RESET}\n")
     sys.exit(0)
 
 
@@ -307,7 +464,7 @@ def print_help():
     print(f"  {YELLOW}/reset{RESET}           Purge all loaded documents from memory and disk")
     print(f"  {YELLOW}clear{RESET}            Clear terminal screen (or type 'cls')")
     print(f"  {YELLOW}/help{RESET}            Display this help screen")
-    print(f"  {YELLOW}/uninstall{RESET}       Uninstall PrivateDesk and remove all data")
+    print(f"  {YELLOW}/uninstall{RESET}       Uninstall PrivateDesk (complete or selective options)")
     print(f"  {YELLOW}/exit{RESET}            Quit PrivateDesk (or press Ctrl+D)\n")
     print(f"{BOLD}💡 Shortcuts & Power Tricks:{RESET}")
     print(f"  • {BOLD}Drag & Drop:{RESET}        Drag any file or folder directly into the prompt!")
