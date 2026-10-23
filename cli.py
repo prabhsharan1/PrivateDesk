@@ -16,7 +16,7 @@ except ImportError:
 import shutil
 from pathlib import Path
 
-from parser import parse_uploaded_file
+from parser import parse_uploaded_file, DocumentParser
 from retriever import DocumentRetriever
 from llm_engine import LLMEngine
 
@@ -111,13 +111,70 @@ def print_banner(retriever: DocumentRetriever):
         print(f"  {YELLOW}○{RESET} {DIM}Knowledge Vault is empty.{RESET}")
 
     print(f"\n{BOLD}⚡ Quick Commands:{RESET}")
-    print(f"  {YELLOW}/upload <path>{RESET}   Index PDF, PPTX, or entire folder (drag & drop)")
-    print(f"  {YELLOW}/docs{RESET}            List loaded documents & slide/page counts")
-    print(f"  {YELLOW}/reset{RESET}           Purge all loaded documents from cache")
-    print(f"  {YELLOW}clear{RESET}            Clear terminal screen")
-    print(f"  {YELLOW}/help{RESET}            Show full command guide & clipboard tricks")
-    print(f"  {YELLOW}/exit{RESET}            Exit PrivateDesk (or press Ctrl+D)")
-    print(f"\n{DIM}Tip: You can drag & drop any file or folder directly into this window!{RESET}\n")
+    print(f"  {YELLOW}/upload <path or url>{RESET}   Index PDF, PPTX, or Confluence / web URL")
+    print(f"  {YELLOW}/docs{RESET}                  List loaded documents & section/page counts")
+    print(f"  {YELLOW}/reset{RESET}                 Purge all loaded documents from cache")
+    print(f"  {YELLOW}clear{RESET}                  Clear terminal screen")
+    print(f"  {YELLOW}/help{RESET}                  Show full command guide & clipboard tricks")
+    print(f"  {YELLOW}/exit{RESET}                  Exit PrivateDesk (or press Ctrl+D)")
+    print(f"\n{DIM}Tip: You can drag & drop files, folders, or paste Confluence/web links directly!{RESET}\n")
+
+
+def index_web_url(url: str, retriever: DocumentRetriever) -> bool:
+    """Fetches a web page or Confluence article, splits by sub-parts/headings, and indexes into the vault."""
+    print(f"\n{CYAN}🌐 Fetching web document:{RESET} {url} ...")
+    try:
+        web_data = DocumentParser.parse_url(url)
+        doc_title = web_data["doc_title"]
+        sections = web_data["sections"]
+        is_targeted = web_data["is_targeted"]
+        target_anchor = web_data["target_anchor"]
+
+        pages = [
+            {
+                "page": s["section_num"],
+                "section_title": s["title"],
+                "url": s["url"],
+                "text": f"## {s['title']}\n\n{s['text']}"
+            }
+            for s in sections
+        ]
+
+        if is_targeted:
+            target_topic = sections[0]["title"]
+            filename = f"[Web] {doc_title} - {target_topic}"
+        else:
+            filename = f"[Web] {doc_title}"
+
+        retriever.add_document(filename, pages, doc_type="web", url=url)
+        total_chunks = retriever.documents.get(filename, {}).get("total_chunks", 0)
+
+        if is_targeted:
+            target_topic = sections[0]["title"]
+            print(f"\n{GREEN}✔ Targeted Topic Extracted:{RESET} {BOLD}\"{target_topic}\"{RESET}")
+            print(f"  {CYAN}📍 Document:{RESET} {doc_title}")
+            print(f"  {CYAN}📍 Source URL:{RESET} {url}")
+            print(f"\n{BOLD}📑 Extracted Section:{RESET}")
+            print(f"  • {BOLD}{target_topic}{RESET} ({total_chunks} chunks)")
+            print(f"\n{GREEN}🎉 Only this targeted topic was added to the Knowledge Vault.{RESET}")
+            print(f"{DIM}💡 You can now ask questions specifically about \"{target_topic}\"!{RESET}\n")
+        else:
+            print(f"\n{GREEN}✔ Web Document Extracted:{RESET} {BOLD}{doc_title}{RESET}")
+            print(f"  {CYAN}📍 Source URL:{RESET} {url}")
+            if web_data.get("target_not_found") and target_anchor:
+                print(f"  {YELLOW}⚠️ Notice: Anchor '#{target_anchor}' was not found on the page; indexed all sections instead.{RESET}")
+            print(f"\n{BOLD}📑 Extracted {len(sections)} Sub-topics / Sections:{RESET}")
+            for s in sections:
+                s_chunks = len(retriever.chunk_text(s["text"]))
+                print(f"  {s['section_num']}. {BOLD}{s['title']}{RESET} ({s_chunks} chunks)")
+            print(f"\n{GREEN}🎉 Successfully indexed into Knowledge Vault ({total_chunks} total chunks).{RESET}")
+            first_topic = sections[0]["title"]
+            print(f"{DIM}💡 You can now ask questions about any of these topics! (e.g., \"Tell me about {first_topic}\"){RESET}\n")
+
+        return True
+    except Exception as e:
+        print(f"{RED}❌ Error processing web URL:{RESET} {e}\n")
+        return False
 
 
 def index_single_file(p: Path, retriever: DocumentRetriever, prefix: str = "") -> bool:
@@ -125,7 +182,7 @@ def index_single_file(p: Path, retriever: DocumentRetriever, prefix: str = "") -
     filename = p.name
     ext = p.suffix.lower()
     if ext not in [".pdf", ".pptx"]:
-        print(f"{YELLOW}⚠️ Unsupported file type:{RESET} '{filename}'. Supported: .pdf, .pptx")
+        print(f"{YELLOW}⚠️ Unsupported file type:{RESET} '{filename}'. Supported: .pdf, .pptx, or web URLs")
         return False
 
     print(f"{CYAN}⏳ {prefix}Indexing {filename}...{RESET}")
@@ -143,7 +200,7 @@ def index_single_file(p: Path, retriever: DocumentRetriever, prefix: str = "") -
 
 
 def handle_upload(file_input, retriever: DocumentRetriever):
-    """Processes one or more uploaded files or entire directories."""
+    """Processes one or more uploaded files, directories, or web/Confluence URLs."""
     if isinstance(file_input, str):
         # Strip extraneous /upload or /add tags if user pasted path and command together
         clean_input = re.sub(r"(^|\s)(/upload|/add)(\s|$)", " ", file_input, flags=re.IGNORECASE).strip()
@@ -154,13 +211,15 @@ def handle_upload(file_input, retriever: DocumentRetriever):
         raw_paths = clean_input
     elif isinstance(clean_input, str):
         if not clean_input:
-            print(f"{YELLOW}Usage: /upload <path-to-file-or-folder>{RESET}")
-            print(f"{DIM}Tip: You can drag and drop files or folders directly into this window.{RESET}")
+            print(f"{YELLOW}Usage: /upload <path-to-file-or-folder or web-url>{RESET}")
+            print(f"{DIM}Tip: You can drag and drop files or paste Confluence/web links directly.{RESET}")
             return
+        # If the input is a web URL, handle it directly
+        if clean_input.startswith(("http://", "https://")):
+            raw_paths = [clean_input]
         # If the entire input is already a valid path (with spaces unescaped), use it directly
-        single_candidate = clean_finder_path(clean_input)
-        if Path(single_candidate).exists():
-            raw_paths = [single_candidate]
+        elif Path(clean_finder_path(clean_input)).exists():
+            raw_paths = [clean_finder_path(clean_input)]
         else:
             try:
                 raw_paths = shlex.split(clean_input, posix=(os.name != "nt"))
@@ -170,6 +229,10 @@ def handle_upload(file_input, retriever: DocumentRetriever):
         return
 
     for raw in raw_paths:
+        if raw.startswith(("http://", "https://")):
+            index_web_url(raw, retriever)
+            continue
+
         clean_path = clean_finder_path(raw)
         if not clean_path:
             continue
@@ -207,7 +270,7 @@ def handle_docs(retriever: DocumentRetriever):
     """Displays loaded documents in the vault."""
     docs = retriever.list_documents()
     if not docs:
-        print(f"{YELLOW}Knowledge Vault is empty.{RESET} Use {CYAN}/upload <file>{RESET} to add training PDFs or PPTXs.")
+        print(f"{YELLOW}Knowledge Vault is empty.{RESET} Use {CYAN}/upload <file or url>{RESET} to add training PDFs, PPTXs, or web links.")
         return
 
     print(f"\n{BOLD}📚 Loaded Documents in Knowledge Vault:{RESET}")
@@ -216,8 +279,14 @@ def handle_docs(retriever: DocumentRetriever):
         fn = d["filename"]
         pages = d["total_pages"]
         chunks = d["total_chunks"]
-        unit = "slides" if fn.lower().endswith(".pptx") else "pages"
-        print(f" {idx}. {BOLD}{fn}{RESET} — {pages} {unit} ({chunks} chunks)")
+        if d.get("type") == "web":
+            unit = "section" if pages == 1 else "sections"
+            print(f" {idx}. 🌐 {BOLD}{fn}{RESET} — {pages} {unit} ({chunks} chunks)")
+            if d.get("url"):
+                print(f"     {DIM}URL: {d.get('url')}{RESET}")
+        else:
+            unit = "slides" if fn.lower().endswith(".pptx") else "pages"
+            print(f" {idx}. 📄 {BOLD}{fn}{RESET} — {pages} {unit} ({chunks} chunks)")
     print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
     print(f"Total: {len(docs)} document(s), {len(retriever.chunks)} total chunks.\n")
 
@@ -459,21 +528,22 @@ def print_help():
     """Prints comprehensive help message."""
     print(f"\n{BOLD}PrivateDesk Command Reference:{RESET}")
     print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
-    print(f"  {YELLOW}/upload <path>{RESET}   Index PDF, PPTX, or entire folder (drag & drop supported)")
-    print(f"  {YELLOW}/docs{RESET}            List all loaded documents and chunk stats")
-    print(f"  {YELLOW}/reset{RESET}           Purge all loaded documents from memory and disk")
-    print(f"  {YELLOW}clear{RESET}            Clear terminal screen (or type 'cls')")
-    print(f"  {YELLOW}/help{RESET}            Display this help screen")
-    print(f"  {YELLOW}/uninstall{RESET}       Uninstall PrivateDesk (complete or selective options)")
-    print(f"  {YELLOW}/exit{RESET}            Quit PrivateDesk (or press Ctrl+D)\n")
+    print(f"  {YELLOW}/upload <path/url>{RESET} Index PDF, PPTX, or Confluence / web URL (supports drag & drop)")
+    print(f"  {YELLOW}/docs{RESET}             List all loaded documents and chunk stats")
+    print(f"  {YELLOW}/reset{RESET}            Purge all loaded documents from memory and disk")
+    print(f"  {YELLOW}clear{RESET}             Clear terminal screen (or type 'cls')")
+    print(f"  {YELLOW}/help{RESET}             Display this help screen")
+    print(f"  {YELLOW}/uninstall{RESET}        Uninstall PrivateDesk (complete or selective options)")
+    print(f"  {YELLOW}/exit{RESET}             Quit PrivateDesk (or press Ctrl+D)\n")
     print(f"{BOLD}💡 Shortcuts & Power Tricks:{RESET}")
-    print(f"  • {BOLD}Drag & Drop:{RESET}        Drag any file or folder directly into the prompt!")
-    print(f"  • {BOLD}Clear Screen:{RESET}       Type {YELLOW}clear{RESET} to wipe the terminal without touching your vault")
-    print(f"  • {BOLD}One-shot query:{RESET}      {CYAN}privatedesk \"What is the laptop loan policy?\"{RESET}")
-    print(f"  • {BOLD}Mac Clipboard pipe:{RESET}  {CYAN}pbpaste | privatedesk{RESET}")
-    print(f"  • {BOLD}Win Clipboard pipe:{RESET}  {CYAN}Get-Clipboard | privatedesk{RESET}")
-    print(f"  • {BOLD}Pipe server logs:{RESET}    {CYAN}cat error.log | privatedesk \"Explain this error\"{RESET}")
-    print(f"  • {BOLD}Tab Auto-complete:{RESET}   Type {YELLOW}/{RESET} and hit {BOLD}[Tab]{RESET} to complete commands")
+    print(f"  • {BOLD}Drag & Drop / Links:{RESET} Drag files/folders or paste Confluence/web links directly!")
+    print(f"  • {BOLD}Targeted Sub-Topics:{RESET} Add #anchor (e.g. #laptop-loans) to index ONLY that topic")
+    print(f"  • {BOLD}Clear Screen:{RESET}        Type {YELLOW}clear{RESET} to wipe the terminal without touching your vault")
+    print(f"  • {BOLD}One-shot query:{RESET}       {CYAN}privatedesk \"What is the laptop loan policy?\"{RESET}")
+    print(f"  • {BOLD}Mac Clipboard pipe:{RESET}   {CYAN}pbpaste | privatedesk{RESET}")
+    print(f"  • {BOLD}Win Clipboard pipe:{RESET}   {CYAN}Get-Clipboard | privatedesk{RESET}")
+    print(f"  • {BOLD}Pipe server logs:{RESET}     {CYAN}cat error.log | privatedesk \"Explain this error\"{RESET}")
+    print(f"  • {BOLD}Tab Auto-complete:{RESET}    Type {YELLOW}/{RESET} and hit {BOLD}[Tab]{RESET} to complete commands")
     print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}\n")
 
 
@@ -485,7 +555,7 @@ def answer_query(query: str, retriever: DocumentRetriever, engine: LLMEngine):
 
     if not retriever.chunks:
         print(f"\n{YELLOW}⚠️ No documents are currently loaded in your vault.{RESET}")
-        print(f"Please use {CYAN}/upload <file.pdf or file.pptx>{RESET} to index training materials first.\n")
+        print(f"Please use {CYAN}/upload <file or url>{RESET} to index training materials first.\n")
         return
 
     print(f"\n{DIM}Thinking...{RESET}")
@@ -499,11 +569,15 @@ def answer_query(query: str, retriever: DocumentRetriever, engine: LLMEngine):
         print(f"\n{CYAN}📚 Source Citations:{RESET}")
         seen = set()
         for s in sources:
-            key = f"{s['filename']}_p{s['page']}"
+            key = f"{s['filename']}_{s['page']}_{s.get('section_title')}"
             if key not in seen:
                 seen.add(key)
-                unit = "Slide" if s['filename'].lower().endswith('.pptx') else "Page"
-                print(f"  • {BOLD}{s['filename']}{RESET} ({unit} {s['page']})")
+                if s.get("section_title"):
+                    link_info = f"\n     {DIM}{s['url']}{RESET}" if s.get("url") else ""
+                    print(f"  • {BOLD}{s['filename']}{RESET} (Section: \"{s['section_title']}\"){link_info}")
+                else:
+                    unit = "Slide" if s['filename'].lower().endswith('.pptx') else "Page"
+                    print(f"  • {BOLD}{s['filename']}{RESET} ({unit} {s['page']})")
     print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}\n")
 
 
@@ -538,19 +612,24 @@ def run_repl(retriever: DocumentRetriever, engine: LLMEngine):
                 file_arg = re.sub(r"(^|\s)(/upload|/add)(\s|$)", " ", user_input, flags=re.IGNORECASE).strip()
                 handle_upload(file_arg, retriever)
             else:
+                # Check if user directly pasted a web URL
+                if user_input.startswith(("http://", "https://")):
+                    print(f"{CYAN}🌐 Detected web URL:{RESET} {user_input}")
+                    handle_upload(user_input, retriever)
                 # Check if user directly dragged/pasted a valid file or folder path without typing /upload
-                candidate_path = clean_finder_path(user_input)
-                if candidate_path and Path(candidate_path).exists():
-                    print(f"{CYAN}📁 Detected input path:{RESET} {candidate_path}")
-                    handle_upload(candidate_path, retriever)
-                elif user_input.startswith("/"):
-                    # Check if it looks like an intended filesystem path that couldn't be found
-                    if user_input.startswith(("/Users", "/home", "/var", "/tmp", "~", "C:", "D:")) or "/" in user_input[1:] or "\\" in user_input:
-                        print(f"{RED}❌ Path not found:{RESET} {user_input}")
-                    else:
-                        print(f"{YELLOW}Unknown command:{RESET} {user_input}. Type {CYAN}/help{RESET} for options.")
                 else:
-                    answer_query(user_input, retriever, engine)
+                    candidate_path = clean_finder_path(user_input)
+                    if candidate_path and Path(candidate_path).exists():
+                        print(f"{CYAN}📁 Detected input path:{RESET} {candidate_path}")
+                        handle_upload(candidate_path, retriever)
+                    elif user_input.startswith("/"):
+                        # Check if it looks like an intended filesystem path that couldn't be found
+                        if user_input.startswith(("/Users", "/home", "/var", "/tmp", "~", "C:", "D:")) or "/" in user_input[1:] or "\\" in user_input:
+                            print(f"{RED}❌ Path not found:{RESET} {user_input}")
+                        else:
+                            print(f"{YELLOW}Unknown command:{RESET} {user_input}. Type {CYAN}/help{RESET} for options.")
+                    else:
+                        answer_query(user_input, retriever, engine)
 
         except (KeyboardInterrupt, EOFError):
             print(f"\n{DIM}Exiting PrivateDesk.{RESET}")

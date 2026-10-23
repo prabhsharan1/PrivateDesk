@@ -35,6 +35,8 @@ class DocumentRetriever:
                 "id": c.get("id"),
                 "filename": c.get("filename"),
                 "page": c.get("page"),
+                "section_title": c.get("section_title"),
+                "url": c.get("url"),
                 "text": c.get("text", ""),
                 "tokens": tokens,
                 "token_counts": token_counts
@@ -51,6 +53,8 @@ class DocumentRetriever:
                 "id": c["id"],
                 "filename": c["filename"],
                 "page": c["page"],
+                "section_title": c.get("section_title"),
+                "url": c.get("url"),
                 "text": c["text"],
                 "tokens": c["tokens"]
             })
@@ -73,15 +77,21 @@ class DocumentRetriever:
             start += self.chunk_size - self.chunk_overlap
         return chunks
 
-    def add_document(self, filename: str, pages: list[dict]):
-        """Indexes all pages from a parsed document."""
+    def add_document(self, filename: str, pages: list[dict], doc_type: str = "file", url: str | None = None):
+        """Indexes all pages/sections from a parsed document."""
         # Remove previous version if re-uploaded
         self.remove_document(filename, sync=False)
 
         total_chunks = 0
+        section_titles = []
         for page_data in pages:
             page_num = page_data["page"]
             text = page_data["text"]
+            section_title = page_data.get("section_title")
+            page_url = page_data.get("url") or url
+            if section_title and section_title not in section_titles:
+                section_titles.append(section_title)
+
             page_chunks = self.chunk_text(text)
 
             for chunk_idx, chunk_text in enumerate(page_chunks):
@@ -91,6 +101,8 @@ class DocumentRetriever:
                     "id": chunk_id,
                     "filename": filename,
                     "page": page_num,
+                    "section_title": section_title,
+                    "url": page_url,
                     "text": chunk_text,
                     "tokens": tokens,
                     "token_counts": Counter(tokens)
@@ -99,8 +111,11 @@ class DocumentRetriever:
 
         self.documents[filename] = {
             "filename": filename,
+            "type": doc_type,
+            "url": url,
             "total_pages": len(pages),
-            "total_chunks": total_chunks
+            "total_chunks": total_chunks,
+            "sections": section_titles
         }
         self._sync_to_disk()
 
@@ -183,6 +198,8 @@ class DocumentRetriever:
             results.append({
                 "filename": chunk["filename"],
                 "page": chunk["page"],
+                "section_title": chunk.get("section_title"),
+                "url": chunk.get("url"),
                 "text": chunk["text"],
                 "score": round(score, 3)
             })

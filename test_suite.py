@@ -224,6 +224,79 @@ def run_tests():
     print("✔ [TC-08] PASSED: Structured Markdown tables and clean bullets verified.")
     passed += 1
 
+    # TC-09: Test Confluence / Web URL Ingestion, Sub-topics & Targeted Anchor Links
+    total += 1
+    print("\n[TC-09] Testing Confluence / Web URL parsing, sub-sections & targeted anchors...")
+    mock_confluence_html = """
+    <!DOCTYPE html>
+    <html>
+    <head><title>IST Department Policies & Services - Confluence</title></head>
+    <body>
+        <div class="header-actions">Edit Page</div>
+        <div id="main-content">
+            <h1>Overview</h1>
+            <p>Welcome to the Information Support & Technology (IST) service directory.</p>
+
+            <h2 id="laptop-loans">Laptop Loan Program</h2>
+            <p>Students can borrow laptops from the Service Desk located in Student Mall.</p>
+            <ul>
+                <li>MacBook Air M2: 7-day loan period</li>
+                <li>Dell Latitude: 7-day loan period</li>
+            </ul>
+            <table>
+                <tr><th>Device</th><th>Max Days</th><th>Renewal</th></tr>
+                <tr><td>MacBook Air</td><td>7 Days</td><td>Once</td></tr>
+                <tr><td>Dell Latitude</td><td>7 Days</td><td>Once</td></tr>
+            </table>
+
+            <h2 id="software-licenses">Software & VPN Licenses</h2>
+            <p>Free campus-wide licenses for MATLAB, SolidWorks, and Cisco AnyConnect.</p>
+
+            <h2 id="duo-mfa">Duo Multi-Factor Authentication</h2>
+            <p>All student and staff logins require Duo 2FA push notifications.</p>
+        </div>
+        <footer>Copyright 2026</footer>
+    </body>
+    </html>
+    """
+
+    from parser import DocumentParser
+    # 1. Test full article ingestion with sub-parts
+    full_doc = DocumentParser.parse_url("https://confluence.example.com/wiki/it-policies", html_content=mock_confluence_html)
+    assert full_doc["doc_title"] == "IST Department Policies & Services", f"Title mismatch: {full_doc['doc_title']}"
+    assert len(full_doc["sections"]) == 4, f"Expected 4 sections, got {len(full_doc['sections'])}"
+    assert full_doc["sections"][1]["title"] == "Laptop Loan Program"
+    assert "| Device | Max Days | Renewal |" in full_doc["sections"][1]["text"]
+
+    # 2. Test targeted anchor link extraction
+    targeted_doc = DocumentParser.parse_url("https://confluence.example.com/wiki/it-policies#laptop-loans", html_content=mock_confluence_html)
+    assert targeted_doc["is_targeted"] is True, "Targeted anchor should be marked true"
+    assert len(targeted_doc["sections"]) == 1, f"Targeted extract should have 1 section, got {len(targeted_doc['sections'])}"
+    assert targeted_doc["sections"][0]["title"] == "Laptop Loan Program"
+    assert "MacBook Air M2: 7-day loan period" in targeted_doc["sections"][0]["text"]
+
+    # 3. Test retriever indexing and citation metadata
+    web_retriever = DocumentRetriever(persistent=False)
+    pages = [
+        {
+            "page": s["section_num"],
+            "section_title": s["title"],
+            "url": s["url"],
+            "text": f"## {s['title']}\n\n{s['text']}"
+        }
+        for s in targeted_doc["sections"]
+    ]
+    doc_name = f"[Web] {targeted_doc['doc_title']} - {targeted_doc['sections'][0]['title']}"
+    web_retriever.add_document(doc_name, pages, doc_type="web", url="https://confluence.example.com/wiki/it-policies#laptop-loans")
+
+    search_hits = web_retriever.search("borrow laptop macbook", top_k=1)
+    assert len(search_hits) == 1, "Expected search hit"
+    assert search_hits[0]["section_title"] == "Laptop Loan Program"
+    assert search_hits[0]["url"] == "https://confluence.example.com/wiki/it-policies#laptop-loans"
+
+    print("✔ [TC-09] PASSED: Confluence sub-section breakdown and targeted anchor extraction verified.")
+    passed += 1
+
     print("\n" + "=" * 60)
     print(f"🎉 ALL TESTS PASSED! ({passed}/{total} test cases succeeded)")
     print("=" * 60)

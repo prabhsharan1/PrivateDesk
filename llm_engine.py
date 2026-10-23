@@ -157,8 +157,18 @@ class LLMEngine:
                 fn = chunk["filename"]
                 pg = chunk["page"]
                 txt = chunk["text"]
-                context_parts.append(f"--- Document: {fn} (Page/Slide {pg}) ---\n{txt}")
-                sources.append({"filename": fn, "page": pg})
+                sec = chunk.get("section_title")
+                url = chunk.get("url")
+                if sec:
+                    context_parts.append(f"--- Document: {fn} (Section: {sec}) ---\n{txt}")
+                else:
+                    context_parts.append(f"--- Document: {fn} (Page/Slide {pg}) ---\n{txt}")
+                sources.append({
+                    "filename": fn,
+                    "page": pg,
+                    "section_title": sec,
+                    "url": url
+                })
             context_block = "\n\n".join(context_parts)
 
         prompt_payload = f"""<document_context>

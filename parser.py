@@ -11,6 +11,9 @@ Optimized for local LLM inference (Qwen 2.5):
 
 import os
 import re
+from html.parser import HTMLParser
+from urllib.parse import urlparse, unquote
+import requests
 
 # Primary engine: PyMuPDF (fast, detects tables and layout reading order)
 try:
@@ -298,14 +301,339 @@ class DocumentParser:
                 raise
             raise ValueError(f"Error reading PowerPoint '{filename}': {str(e)}")
 
+    @staticmethod
+    def parse_url(url: str, html_content: str | None = None) -> dict:
+        """
+        Fetches and extracts clean Markdown sections from a web page or Confluence article.
+        If a URL has an anchor hash (#topic), selectively extracts ONLY that section.
+        """
+        parsed_url = urlparse(url)
+        fragment = parsed_url.fragment.strip().lower() if parsed_url.fragment else None
+        base_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}"
 
-def parse_uploaded_file(file_path: str, filename: str) -> list[dict]:
-    """Factory function to parse uploaded documents based on extension (.pdf or .pptx)."""
-    ext = os.path.splitext(filename)[1].lower()
+        if html_content is None:
+            try:
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 PrivateDesk/2.0"
+                }
+                res = requests.get(url, headers=headers, timeout=15)
+                if res.status_code in (401, 403):
+                    raise ValueError(
+                        f"Access Denied (HTTP {res.status_code}) for '{url}'. "
+                        "If this is a private Confluence wiki or intranet page, it must be accessible from your current network/VPN without browser session login."
+                    )
+                elif res.status_code == 404:
+                    raise ValueError(f"Page not found (HTTP 404): '{url}'.")
+                elif res.status_code != 200:
+                    raise ValueError(f"HTTP error {res.status_code} when fetching '{url}'.")
+
+                res.encoding = res.apparent_encoding or "utf-8"
+                html_text = res.text
+            except requests.exceptions.Timeout:
+                raise ValueError(f"Connection timed out while trying to reach '{url}'.")
+            except requests.exceptions.ConnectionError:
+                raise ValueError(f"Could not connect to '{url}'. Check your internet connection or URL.")
+            except Exception as e:
+                if isinstance(e, ValueError):
+                    raise
+                raise ValueError(f"Error fetching '{url}': {str(e)}")
+        else:
+            html_text = html_content
+
+        html_parser = ConfluenceHTMLParser(target_anchor=fragment)
+        html_parser.feed(html_text)
+        html_parser.close()
+
+        # Clean document title
+        raw_title = html_parser.doc_title.strip()
+        if raw_title:
+            clean_title = re.sub(
+                r"\s*[-|–—]\s*(Confluence|Notion|Wiki|Documentation|Docs|Knowledge Base).*$",
+                "",
+                raw_title,
+                flags=re.IGNORECASE
+            ).strip()
+            doc_title = clean_title or raw_title
+        else:
+            path_parts = [p for p in parsed_url.path.split("/") if p]
+            doc_title = unquote(path_parts[-1]) if path_parts else parsed_url.netloc
+
+        # Clean section contents
+        extracted_sections = []
+        for sec in html_parser.sections:
+            sec_title = sec["title"].strip()
+            sec_text = clean_markdown_for_llm("\n\n".join(sec["lines"]))
+            if sec_text:
+                extracted_sections.append({
+                    "title": sec_title,
+                    "anchors": sec["anchors"],
+                    "text": sec_text
+                })
+
+        if not extracted_sections:
+            raise ValueError(f"'{url}' contains no readable article text or paragraphs.")
+
+        # Targeted Anchor Matching
+        is_targeted = False
+        target_not_found = False
+        final_sections = extracted_sections
+
+        if fragment:
+            clean_target = fragment.lower().lstrip("#")
+            slug_target = re.sub(r"[^a-z0-9]+", "-", clean_target).strip("-")
+
+            matched = []
+            for s in extracted_sections:
+                s_anchors = [a.lower() for a in s["anchors"]]
+                s_title_slug = re.sub(r"[^a-z0-9]+", "-", s["title"].lower()).strip("-")
+
+                # 1. Exact anchor id match
+                if clean_target in s_anchors or any(clean_target in a for a in s_anchors):
+                    matched.append(s)
+                    break
+                # 2. Slugified heading match
+                elif slug_target and (slug_target == s_title_slug or slug_target in s_title_slug):
+                    matched.append(s)
+                    break
+                # 3. Substring match on title
+                elif clean_target in s["title"].lower():
+                    matched.append(s)
+                    break
+
+            if matched:
+                is_targeted = True
+                final_sections = matched
+            else:
+                target_not_found = True
+
+        return {
+            "doc_title": doc_title,
+            "url": url,
+            "base_url": base_url,
+            "target_anchor": fragment,
+            "is_targeted": is_targeted,
+            "target_not_found": target_not_found,
+            "sections": [
+                {
+                    "section_num": idx,
+                    "title": s["title"],
+                    "anchor": s["anchors"][0] if s["anchors"] else None,
+                    "text": s["text"],
+                    "url": f"{base_url}#{s['anchors'][0]}" if s["anchors"] else base_url
+                }
+                for idx, s in enumerate(final_sections, 1)
+            ]
+        }
+
+
+class ConfluenceHTMLParser(HTMLParser):
+    def __init__(self, target_anchor: str | None = None):
+        super().__init__()
+        self.target_anchor = target_anchor.lower().lstrip("#") if target_anchor else None
+
+        self.doc_title = ""
+        self.in_title = False
+
+        # Tags to ignore completely
+        self.ignored_tags = {
+            "script", "style", "nav", "header", "footer", "aside",
+            "noscript", "svg", "form", "button", "iframe"
+        }
+        self.ignore_depth = 0
+
+        # Heading tracking
+        self.heading_tags = {"h1", "h2", "h3", "h4"}
+        self.current_heading_tag = None
+        self.current_heading_text = []
+        self.current_heading_anchors = []
+
+        # Sections list: [ {"title": ..., "anchors": [...], "lines": [...]} ]
+        self.sections = []
+        self.current_section = {
+            "title": "Overview",
+            "anchors": [],
+            "lines": []
+        }
+
+        # Table tracking
+        self.in_table = False
+        self.table_rows = []
+        self.current_row = []
+        self.current_cell = []
+
+        # List tracking
+        self.list_depth = 0
+        self.in_list_item = False
+        self.current_li = []
+
+    def handle_starttag(self, tag, attrs):
+        attrs_dict = dict(attrs)
+        tag_id = attrs_dict.get("id") or attrs_dict.get("name")
+        classes = attrs_dict.get("class", "").lower()
+
+        # Ignore Confluence/wiki sidebars, TOC macros, and breadcrumb navigation
+        if any(c in classes for c in ["toc-macro", "table-of-contents", "breadcrumbs", "page-metadata", "header-actions"]):
+            self.ignore_depth += 1
+            return
+
+        if tag in self.ignored_tags:
+            self.ignore_depth += 1
+            return
+
+        if self.ignore_depth > 0:
+            return
+
+        if tag == "title":
+            self.in_title = True
+            return
+
+        if tag in self.heading_tags:
+            self.current_heading_tag = tag
+            self.current_heading_text = []
+            self.current_heading_anchors = []
+            if tag_id:
+                self.current_heading_anchors.append(tag_id.lower())
+            return
+
+        # Check for anchor identifiers in non-heading tags
+        if tag_id:
+            if self.current_heading_tag:
+                self.current_heading_anchors.append(tag_id.lower())
+            else:
+                self.current_section["anchors"].append(tag_id.lower())
+
+        if tag == "table":
+            self.in_table = True
+            self.table_rows = []
+
+        elif tag == "tr" and self.in_table:
+            self.current_row = []
+
+        elif tag in ("td", "th") and self.in_table:
+            self.current_cell = []
+
+        elif tag in ("ul", "ol"):
+            self.list_depth += 1
+
+        elif tag == "li":
+            self.in_list_item = True
+            self.current_li = []
+
+    def handle_endtag(self, tag):
+        if tag in self.ignored_tags or tag in ("div", "section"):
+            if self.ignore_depth > 0:
+                self.ignore_depth -= 1
+                return
+
+        if self.ignore_depth > 0:
+            return
+
+        if tag == "title":
+            self.in_title = False
+            return
+
+        if tag in self.heading_tags and tag == self.current_heading_tag:
+            heading_title = "".join(self.current_heading_text).strip()
+            if heading_title:
+                if self.current_section["lines"] or self.current_section["title"] != "Overview":
+                    self.sections.append(self.current_section)
+
+                self.current_section = {
+                    "title": heading_title,
+                    "anchors": list(self.current_heading_anchors),
+                    "lines": []
+                }
+            self.current_heading_tag = None
+            self.current_heading_text = []
+            self.current_heading_anchors = []
+
+        elif tag == "table" and self.in_table:
+            self.in_table = False
+            if self.table_rows:
+                header = self.table_rows[0]
+                md_header = "| " + " | ".join(header) + " |"
+                md_sep = "| " + " | ".join(["---"] * len(header)) + " |"
+                md_body = ["| " + " | ".join(r) + " |" for r in self.table_rows[1:]]
+                table_md = "\n".join([md_header, md_sep] + md_body)
+                self.current_section["lines"].append(table_md)
+            self.table_rows = []
+
+        elif tag == "tr" and self.in_table:
+            if self.current_row:
+                self.table_rows.append(self.current_row)
+            self.current_row = []
+
+        elif tag in ("td", "th") and self.in_table:
+            cell_text = "".join(self.current_cell).strip().replace("\n", " ")
+            self.current_row.append(cell_text)
+            self.current_cell = []
+
+        elif tag in ("ul", "ol"):
+            if self.list_depth > 0:
+                self.list_depth -= 1
+
+        elif tag == "li" and self.in_list_item:
+            self.in_list_item = False
+            li_text = "".join(self.current_li).strip()
+            if li_text:
+                indent = "  " * max(0, self.list_depth - 1)
+                self.current_section["lines"].append(f"{indent}- {li_text}")
+            self.current_li = []
+
+        elif tag == "p":
+            self.current_section["lines"].append("")
+
+    def handle_data(self, data):
+        if self.ignore_depth > 0:
+            return
+
+        text = data.strip()
+        if self.in_title:
+            self.doc_title += data
+            return
+
+        if self.current_heading_tag:
+            self.current_heading_text.append(data)
+            return
+
+        if self.in_table and self.current_cell is not None:
+            self.current_cell.append(data)
+            return
+
+        if self.in_list_item:
+            self.current_li.append(data)
+            return
+
+        if text:
+            self.current_section["lines"].append(text)
+
+    def close(self):
+        super().close()
+        if self.current_section["lines"] or self.current_section["title"] != "Overview":
+            self.sections.append(self.current_section)
+
+
+def parse_uploaded_file(file_path_or_url: str, filename: str | None = None) -> list[dict]:
+    """Factory function to parse uploaded documents based on extension (.pdf or .pptx) or web URL."""
+    if file_path_or_url.startswith(("http://", "https://")):
+        web_data = DocumentParser.parse_url(file_path_or_url)
+        return [
+            {
+                "filename": f"[Web] {web_data['doc_title']}" if not web_data["is_targeted"] else f"[Web] {web_data['doc_title']} - {s['title']}",
+                "page": s["section_num"],
+                "section_title": s["title"],
+                "url": s["url"],
+                "text": f"## {s['title']}\n\n{s['text']}"
+            }
+            for s in web_data["sections"]
+        ]
+
+    fname = filename or os.path.basename(file_path_or_url)
+    ext = os.path.splitext(fname)[1].lower()
     if ext == ".pdf":
-        return DocumentParser.parse_pdf(file_path, filename)
+        return DocumentParser.parse_pdf(file_path_or_url, fname)
     elif ext == ".pptx":
-        return DocumentParser.parse_pptx(file_path, filename)
+        return DocumentParser.parse_pptx(file_path_or_url, fname)
     else:
-        raise ValueError(f"Unsupported file format '{ext}'. Supported formats: .pdf, .pptx")
+        raise ValueError(f"Unsupported file format '{ext}'. Supported formats: .pdf, .pptx, or web URLs (http/https)")
 

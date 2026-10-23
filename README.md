@@ -30,9 +30,33 @@ Uploading confidential internal files to cloud AI tools like ChatGPT or Gemini r
 **PrivateDesk gives you a personal, Claude Code-style AI co-pilot that runs 100% locally on your machine:**
 * **100% Offline & Air-Gapped:** Powered by [Ollama](https://ollama.com) running **Qwen 2.5** directly on your local GPU / Neural Engine. Zero bytes leave your machine.
 * **Smart Layout & Markdown Tables:** Preserves multi-column reading order and automatically formats PDF and PPTX tables into clean Markdown tables for accurate quantitative reasoning.
-* **Persistent Knowledge Vault:** Drag and drop your PDFs or PowerPoint decks (`.pptx`) once. Documents remain cached locally across all terminal tabs until you clear them.
+* **Persistent Knowledge Vault:** Drag and drop your PDFs or PowerPoint decks (`.pptx`) once, or ingest **Confluence & web URLs**. Documents remain cached locally across all terminal tabs until you clear them.
+* **Confluence & Web Ingestion:** Automatically splits long wiki pages and manuals into distinct **sub-topics** (via `H1-H4` headings), with support for **targeted anchor links** (e.g. `#laptop-loans`) to index only a single topic!
 * **Unix Pipe Superpower:** Pipe copied clipboard text, terminal crash logs, or command output directly into the bot using `cat error.log | privatedesk` or `pbpaste | privatedesk`.
-* **Zero Hallucinations & Exact Citations:** Answers are strictly grounded in your uploaded documents, complete with slide- and page-level citations.
+* **Zero Hallucinations & Exact Citations:** Answers are strictly grounded in your uploaded documents and web sections, complete with slide, page, and sub-topic citations.
+
+---
+
+### 🌐 Confluence & Web Page Ingestion
+
+PrivateDesk allows you to index documentation portals, wikis, and web pages:
+
+```bash
+# 1. Ingest an entire Confluence page (auto-split into sub-topics)
+/upload https://confluence.company.com/pages/it-policies
+
+# 2. Ingest ONLY a specific topic using an anchor hash
+/upload https://confluence.company.com/pages/it-policies#laptop-loans
+
+# 3. Direct URL paste in interactive chat (auto-detected)
+> https://docs.python.org/3/tutorial/errors.html
+```
+
+When you add a link:
+1. **PrivateDesk fetches and extracts clean Markdown** (headings, paragraphs, lists, and tables).
+2. **Displays a structured breakdown** of all extracted sub-topics so you immediately know what PrivateDesk learned.
+3. **If an anchor `#topic` is provided**, it extracts **only that sub-part**, keeping the vault focused.
+4. **Stored 100% offline** in your local Knowledge Vault, so you can query it anywhere without internet or VPN access!
 
 ---
 
@@ -258,8 +282,8 @@ In macOS Terminal, you can **drag and drop any PDF or PPTX file directly from Fi
 ### Interactive REPL Commands
 | Command | Description |
 | :--- | :--- |
-| **`/upload <path>`** or **`/add`** | Index one or more `.pdf`, `.pptx` documents, or entire folders (supports Finder drag-and-drop). |
-| **`/docs`** or **`/list`** | View all currently loaded documents, slide/page counts, and total chunks. |
+| **`/upload <path or url>`** or **`/add`** | Index local `.pdf`, `.pptx` documents, folders, or Confluence / web URLs. |
+| **`/docs`** or **`/list`** | View all currently loaded documents, slide/page/section counts, and total chunks. |
 | **`clear`** or **`cls`** | Clear the terminal screen (leaves your vault documents intact). |
 | **`/reset`** or **`/purge`** | Purge loaded documents from cache (with safety confirmation prompt). |
 | **`/uninstall`** | Uninstall PrivateDesk (with options for complete wipe or selective component removal). |
@@ -270,7 +294,7 @@ In macOS Terminal, you can **drag and drop any PDF or PPTX file directly from Fi
 | Flag | Description |
 | :--- | :--- |
 | **`privatedesk "<query>"`** | One-shot query mode. Prints response to stdout and exits. |
-| **`privatedesk --upload <files...>`** | Batch upload and index files or directories from command line. |
+| **`privatedesk --upload <files or urls...>`** | Batch upload and index files, directories, or web links from command line. |
 | **`privatedesk --docs`** | Display list of indexed documents in the vault. |
 | **`privatedesk --reset`** | Wipe all indexed documents from cache without interactive prompts. |
 | **`privatedesk --uninstall`** | Launch interactive uninstaller (complete or selective). |
