@@ -1,0 +1,12 @@
+{
+  "version": "2.1.0",
+  "title": "Confluence & Web Links, Targeted Anchor Ingestion & Smart Uninstaller",
+  "highlights": [
+    "Ingest Confluence & public web links directly with /upload <url> or by pasting the link",
+    "Smart sub-section topic splitting with Markdown table & bullet list formatting",
+    "Targeted anchor extraction (e.g. url#section extracts only that specific section)",
+    "Interactive selective uninstaller with Complete, App-only, or Custom modes",
+    "In-terminal update checker with '/update' and '/update --info'"
+  ],
+  "date": "2026-10-23"
+}

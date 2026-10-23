@@ -9,6 +9,10 @@ import sys
 import os
 import re
 import shlex
+import json
+import threading
+import subprocess
+import urllib.request
 try:
     import readline  # Not available on Windows
 except ImportError:
@@ -20,7 +24,86 @@ from parser import parse_uploaded_file, DocumentParser
 from retriever import DocumentRetriever
 from llm_engine import LLMEngine
 
-VERSION = "2.0.0"
+def load_local_version_info():
+    """Loads version and release metadata from version.json."""
+    version_file = Path(__file__).resolve().parent / "version.json"
+    if version_file.exists():
+        try:
+            with open(version_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {
+        "version": "2.1.0",
+        "title": "PrivateDesk",
+        "highlights": [],
+        "date": "2026-10-23"
+    }
+
+LOCAL_VERSION_INFO = load_local_version_info()
+VERSION = LOCAL_VERSION_INFO.get("version", "2.1.0")
+
+def parse_version_tuple(v_str):
+    """Extracts integer tuple from version string for semantic comparison."""
+    nums = re.findall(r"\d+", str(v_str or ""))
+    return tuple(map(int, nums)) if nums else (0, 0, 0)
+
+# Remote version URL (Raw GitHub has no rate limits)
+REMOTE_VERSION_URL = "https://raw.githubusercontent.com/prabhsharan1/PrivateDesk/main/version.json"
+
+_update_lock = threading.Lock()
+_cached_remote_info = None
+_update_check_done = False
+_update_thread = None
+
+def fetch_remote_version_info(timeout: float = 1.0):
+    """Fetches version.json from GitHub raw repository."""
+    try:
+        req = urllib.request.Request(
+            REMOTE_VERSION_URL,
+            headers={"User-Agent": "PrivateDesk-CLI"}
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status == 200:
+                return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        pass
+    return None
+
+def _async_update_worker():
+    global _cached_remote_info, _update_check_done
+    info = fetch_remote_version_info(timeout=1.0)
+    with _update_lock:
+        _cached_remote_info = info
+        _update_check_done = True
+
+def start_background_update_check():
+    """Starts non-blocking background thread to check for updates."""
+    global _update_thread
+    _update_thread = threading.Thread(target=_async_update_worker, daemon=True)
+    _update_thread.start()
+
+def get_update_status(wait_timeout: float = 0.5):
+    """
+    Returns (status, info_dict) where status is:
+      'available' : remote version is higher than local
+      'up_to_date': remote version is <= local
+      'unknown'   : check timed out or offline
+    """
+    global _update_thread
+    if _update_thread and _update_thread.is_alive() and wait_timeout > 0:
+        _update_thread.join(timeout=wait_timeout)
+
+    with _update_lock:
+        info = _cached_remote_info
+
+    if not info:
+        return ("unknown", None)
+
+    remote_v = info.get("version", "")
+    if parse_version_tuple(remote_v) > parse_version_tuple(VERSION):
+        return ("available", info)
+    return ("up_to_date", info)
 
 # Windows consoles: enable ANSI colors and force UTF-8 so emoji/box characters never crash printing
 if os.name == "nt":
@@ -67,6 +150,7 @@ COMMANDS = [
     "/add",
     "/docs",
     "/list",
+    "/update",
     "/reset",
     "/purge",
     "/uninstall",
@@ -110,9 +194,19 @@ def print_banner(retriever: DocumentRetriever):
     else:
         print(f"  {YELLOW}○{RESET} {DIM}Knowledge Vault is empty.{RESET}")
 
+    status, info = get_update_status(wait_timeout=0.4)
+    if status == "available":
+        remote_v = info.get("version", "")
+        update_line = f"  {YELLOW}/update{RESET}                  Update PrivateDesk {GREEN}(★ Update available: v{remote_v}){RESET}"
+    elif status == "up_to_date":
+        update_line = f"  {YELLOW}/update{RESET}                  Update PrivateDesk {DIM}(Up to date){RESET}"
+    else:
+        update_line = f"  {YELLOW}/update{RESET}                  Check for updates / update PrivateDesk"
+
     print(f"\n{BOLD}⚡ Quick Commands:{RESET}")
     print(f"  {YELLOW}/upload <path or url>{RESET}   Index PDF, PPTX, or Confluence / web URL")
     print(f"  {YELLOW}/docs{RESET}                  List loaded documents & section/page counts")
+    print(update_line)
     print(f"  {YELLOW}/reset{RESET}                 Purge all loaded documents from cache")
     print(f"  {YELLOW}clear{RESET}                  Clear terminal screen")
     print(f"  {YELLOW}/help{RESET}                  Show full command guide & clipboard tricks")
@@ -524,12 +618,172 @@ def handle_uninstall():
     sys.exit(0)
 
 
+def handle_update_info():
+    """Displays release highlights and What's New details."""
+    print(f"\n{CYAN}🔍 Checking latest release information from GitHub...{RESET}")
+    remote_info = fetch_remote_version_info(timeout=3.0)
+    
+    if remote_info:
+        remote_v = remote_info.get("version", VERSION)
+        remote_title = remote_info.get("title", "")
+        remote_date = remote_info.get("date", "")
+        highlights = remote_info.get("highlights", [])
+        is_newer = parse_version_tuple(remote_v) > parse_version_tuple(VERSION)
+
+        if is_newer:
+            print(f"\n{CYAN}╭──────────────────────────────────────────────────────────────╮{RESET}")
+            print(f"{CYAN}│{RESET}  {BOLD}🌟 PrivateDesk v{remote_v} is Available!{RESET} {DIM}(Installed: v{VERSION}){RESET}   {CYAN}│{RESET}")
+            print(f"{CYAN}╰──────────────────────────────────────────────────────────────╯{RESET}")
+            if remote_title:
+                print(f"  {BOLD}Release:{RESET} {remote_title} {DIM}({remote_date}){RESET}")
+            print(f"\n{BOLD}✨ What's New:{RESET}")
+            for h in highlights:
+                print(f"  {GREEN}•{RESET} {h}")
+            print(f"\n{CYAN}👉 To install this update, run:{RESET} {YELLOW}/update{RESET} (or from terminal: {BOLD}privatedesk --update{RESET})\n")
+        else:
+            print(f"\n{GREEN}✔ You are running the latest version of PrivateDesk (v{VERSION}).{RESET}")
+            if remote_title:
+                print(f"  {BOLD}Release:{RESET} {remote_title} {DIM}({remote_date}){RESET}")
+            if highlights:
+                print(f"\n{BOLD}✨ Features & Highlights in v{VERSION}:{RESET}")
+                for h in highlights:
+                    print(f"  {GREEN}•{RESET} {h}")
+            print("")
+    else:
+        # Offline or couldn't reach GitHub: show local version highlights
+        local_highlights = LOCAL_VERSION_INFO.get("highlights", [])
+        local_title = LOCAL_VERSION_INFO.get("title", "")
+        print(f"\n{YELLOW}ℹ️ Currently offline or GitHub unreachable.{RESET}")
+        print(f"Installed Version: {BOLD}v{VERSION}{RESET}")
+        if local_title:
+            print(f"Title: {local_title}")
+        if local_highlights:
+            print(f"\n{BOLD}✨ Features in installed v{VERSION}:{RESET}")
+            for h in local_highlights:
+                print(f"  • {h}")
+        print("")
+
+
+def handle_update(force: bool = False):
+    """Updates PrivateDesk to the latest version while preserving vault data."""
+    print(f"\n{CYAN}🔄 Checking for updates from GitHub...{RESET}")
+    remote_info = fetch_remote_version_info(timeout=3.5)
+
+    remote_v = remote_info.get("version", "") if remote_info else ""
+    is_newer = False
+    if remote_v:
+        is_newer = parse_version_tuple(remote_v) > parse_version_tuple(VERSION)
+
+    if not is_newer and not force:
+        if remote_v:
+            print(f"\n{GREEN}✔ PrivateDesk is already up to date (v{VERSION}).{RESET}")
+            print(f"{DIM}Type {YELLOW}/update --info{RESET}{DIM} to see release highlights.{RESET}")
+            print(f"{DIM}(To force a re-download anyway, run: {YELLOW}/update --force{RESET}{DIM}){RESET}\n")
+        else:
+            print(f"\n{YELLOW}⚠️ Could not connect to GitHub to check for updates.{RESET}")
+            print(f"Please check your internet connection and try again.\n")
+        return
+
+    target_version = remote_v if remote_v else "latest"
+    if is_newer:
+        print(f"\n{GREEN}🚀 New version detected:{RESET} {BOLD}v{target_version}{RESET} (currently running v{VERSION})")
+    
+    if not force:
+        try:
+            choice = input(f"\nInstall update to v{target_version} now? [Y/n]: ").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            print(f"\n{DIM}Update cancelled.{RESET}")
+            return
+        if choice and not choice.startswith("y"):
+            print(f"{DIM}Update cancelled.{RESET}\n")
+            return
+
+    app_dir = Path(__file__).resolve().parent
+    repo_raw = "https://raw.githubusercontent.com/prabhsharan1/PrivateDesk/main"
+    update_files = ["cli.py", "parser.py", "retriever.py", "storage.py", "llm_engine.py", "version.json", "requirements.txt"]
+
+    print(f"\n{CYAN}📥 Updating PrivateDesk components in:{RESET} {app_dir}")
+
+    updated_ok = False
+    # Attempt 1: Git pull if running from a git repository
+    if (app_dir / ".git").is_dir() and shutil.which("git"):
+        try:
+            print(f"  {CYAN}⚙️ Pulling latest changes via git...{RESET}")
+            res = subprocess.run(["git", "-C", str(app_dir), "pull", "--ff-only"], capture_output=True, text=True)
+            if res.returncode == 0:
+                updated_ok = True
+                print(f"  {GREEN}✔ Git repository successfully updated.{RESET}")
+            else:
+                print(f"  {YELLOW}⚠️ Git pull reported:{RESET} {res.stderr.strip() or res.stdout.strip()}")
+        except Exception as e:
+            print(f"  {YELLOW}⚠️ Git pull failed ({e}); falling back to direct download.{RESET}")
+
+    # Attempt 2: Direct HTTP download from GitHub raw
+    if not updated_ok:
+        try:
+            print(f"  {CYAN}⚙️ Downloading updated components from GitHub...{RESET}")
+            for f in update_files:
+                url = f"{repo_raw}/{f}"
+                req = urllib.request.Request(url, headers={"User-Agent": "PrivateDesk-CLI"})
+                with urllib.request.urlopen(req, timeout=8.0) as resp:
+                    if resp.status == 200:
+                        content = resp.read()
+                        with open(app_dir / f, "wb") as out_f:
+                            out_f.write(content)
+                        print(f"  {GREEN}✔{RESET} Updated {f}")
+                    else:
+                        raise RuntimeError(f"HTTP {resp.status} for {f}")
+            updated_ok = True
+        except Exception as e:
+            print(f"\n{RED}❌ Failed to download update files:{RESET} {e}")
+            print(f"{YELLOW}Your existing installation was left intact.{RESET}\n")
+            return
+
+    # Attempt to update dependencies
+    req_file = app_dir / "requirements.txt"
+    if req_file.exists():
+        try:
+            print(f"  {CYAN}📦 Checking Python dependencies...{RESET}")
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check", "-r", str(req_file)],
+                capture_output=True,
+                check=False
+            )
+            print(f"  {GREEN}✔ Dependencies up to date.{RESET}")
+        except Exception:
+            pass
+
+    vault_count = 0
+    try:
+        vault_count = len(DocumentRetriever(persistent=True).list_documents())
+    except Exception:
+        pass
+
+    print(f"\n{CYAN}=========================================================={RESET}")
+    print(f"{BOLD}{GREEN}  🎉 PrivateDesk Successfully Updated to v{target_version}!{RESET}")
+    print(f"{CYAN}=========================================================={RESET}")
+    print(f"  {GREEN}●{RESET} Knowledge Vault cache preserved ({vault_count} document(s) safe)")
+    print(f"  {CYAN}💡 Run '{YELLOW}/update --info{CYAN}' to see what's new!{RESET}\n")
+
+    # Offer to reload immediately
+    try:
+        restart = input("Restart PrivateDesk now to load the update? [Y/n]: ").strip().lower()
+        if not restart or restart.startswith("y"):
+            print(f"{CYAN}Restarting PrivateDesk...{RESET}\n")
+            os.execv(sys.executable, [sys.executable, str(app_dir / "cli.py")])
+    except Exception:
+        pass
+    print(f"{DIM}Please exit and re-open PrivateDesk to use the updated version.{RESET}\n")
+
+
 def print_help():
     """Prints comprehensive help message."""
     print(f"\n{BOLD}PrivateDesk Command Reference:{RESET}")
     print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
     print(f"  {YELLOW}/upload <path/url>{RESET} Index PDF, PPTX, or Confluence / web URL (supports drag & drop)")
     print(f"  {YELLOW}/docs{RESET}             List all loaded documents and chunk stats")
+    print(f"  {YELLOW}/update{RESET}           Check for and install updates to PrivateDesk")
+    print(f"  {YELLOW}/update --info{RESET}    Display What's New and release highlights")
     print(f"  {YELLOW}/reset{RESET}            Purge all loaded documents from memory and disk")
     print(f"  {YELLOW}clear{RESET}             Clear terminal screen (or type 'cls')")
     print(f"  {YELLOW}/help{RESET}             Display this help screen")
@@ -538,6 +792,7 @@ def print_help():
     print(f"{BOLD}💡 Shortcuts & Power Tricks:{RESET}")
     print(f"  • {BOLD}Drag & Drop / Links:{RESET} Drag files/folders or paste Confluence/web links directly!")
     print(f"  • {BOLD}Targeted Sub-Topics:{RESET} Add #anchor (e.g. #laptop-loans) to index ONLY that topic")
+    print(f"  • {BOLD}Release Highlights:{RESET}  Type {YELLOW}/update --info{RESET} to see what's new in the release")
     print(f"  • {BOLD}Clear Screen:{RESET}        Type {YELLOW}clear{RESET} to wipe the terminal without touching your vault")
     print(f"  • {BOLD}One-shot query:{RESET}       {CYAN}privatedesk \"What is the laptop loan policy?\"{RESET}")
     print(f"  • {BOLD}Mac Clipboard pipe:{RESET}   {CYAN}pbpaste | privatedesk{RESET}")
@@ -603,6 +858,12 @@ def run_repl(retriever: DocumentRetriever, engine: LLMEngine):
                 handle_purge(retriever)
             elif cmd in ["/uninstall", "uninstall"]:
                 handle_uninstall()
+            elif cmd in ["/update --info", "/update -i", "/update info", "update info", "update --info"]:
+                handle_update_info()
+            elif cmd in ["/update --force", "/update -f"]:
+                handle_update(force=True)
+            elif cmd in ["/update", "update"]:
+                handle_update()
             elif cmd in ["/help", "help", "?"]:
                 print_help()
             elif cmd in ["/docs", "/list", "docs", "list"]:
@@ -637,6 +898,30 @@ def run_repl(retriever: DocumentRetriever, engine: LLMEngine):
 
 
 def main():
+    # Start non-blocking background check for updates immediately
+    start_background_update_check()
+
+    # Fast-path command-line flags that don't need DocumentRetriever or LLMEngine
+    if len(sys.argv) > 1:
+        first_arg = sys.argv[1]
+        if first_arg in ["--version", "-v"]:
+            print(f"PrivateDesk CLI v{VERSION}")
+            sys.exit(0)
+        elif first_arg in ["--update-info", "-ui"]:
+            handle_update_info()
+            sys.exit(0)
+        elif first_arg in ["--update", "-U"]:
+            if len(sys.argv) > 2 and sys.argv[2] in ["--info", "-i", "info"]:
+                handle_update_info()
+            elif len(sys.argv) > 2 and sys.argv[2] in ["--force", "-f", "force"]:
+                handle_update(force=True)
+            else:
+                handle_update()
+            sys.exit(0)
+        elif first_arg in ["--uninstall"]:
+            handle_uninstall()
+            sys.exit(0)
+
     retriever = DocumentRetriever(persistent=True)
     engine = LLMEngine()
 
@@ -647,17 +932,11 @@ def main():
             print_banner(retriever)
             print_help()
             sys.exit(0)
-        elif first_arg in ["--version", "-v"]:
-            print(f"PrivateDesk CLI v{VERSION}")
-            sys.exit(0)
         elif first_arg in ["--docs", "-d"]:
             handle_docs(retriever)
             sys.exit(0)
         elif first_arg in ["--clear", "-c", "--reset", "-r", "--purge"]:
             handle_purge(retriever, force=True)
-            sys.exit(0)
-        elif first_arg in ["--uninstall"]:
-            handle_uninstall()
             sys.exit(0)
         elif first_arg in ["--upload", "-u"]:
             if len(sys.argv) > 2:

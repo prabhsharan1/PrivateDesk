@@ -11,7 +11,7 @@ CYAN="\033[36m"; YELLOW="\033[33m"; RESET="\033[0m"
 
 REPO_GIT="https://github.com/prabhsharan1/PrivateDesk.git"
 REPO_RAW="https://raw.githubusercontent.com/prabhsharan1/PrivateDesk/main"
-APP_FILES="cli.py parser.py retriever.py storage.py llm_engine.py requirements.txt"
+APP_FILES="cli.py parser.py retriever.py storage.py llm_engine.py version.json requirements.txt"
 
 say()  { echo -e "$1"; }
 die()  { echo -e "${RED}❌ $1${RESET}"; exit 1; }

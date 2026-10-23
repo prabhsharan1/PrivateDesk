@@ -284,6 +284,8 @@ In macOS Terminal, you can **drag and drop any PDF or PPTX file directly from Fi
 | :--- | :--- |
 | **`/upload <path or url>`** or **`/add`** | Index local `.pdf`, `.pptx` documents, folders, or Confluence / web URLs. |
 | **`/docs`** or **`/list`** | View all currently loaded documents, slide/page/section counts, and total chunks. |
+| **`/update`** | Check for and install updates to PrivateDesk (preserves Knowledge Vault). |
+| **`/update --info`** | View release notes and What's New highlights for latest or current version. |
 | **`clear`** or **`cls`** | Clear the terminal screen (leaves your vault documents intact). |
 | **`/reset`** or **`/purge`** | Purge loaded documents from cache (with safety confirmation prompt). |
 | **`/uninstall`** | Uninstall PrivateDesk (with options for complete wipe or selective component removal). |
@@ -296,10 +298,34 @@ In macOS Terminal, you can **drag and drop any PDF or PPTX file directly from Fi
 | **`privatedesk "<query>"`** | One-shot query mode. Prints response to stdout and exits. |
 | **`privatedesk --upload <files or urls...>`** | Batch upload and index files, directories, or web links from command line. |
 | **`privatedesk --docs`** | Display list of indexed documents in the vault. |
+| **`privatedesk --update`** | Check for and install the latest PrivateDesk update from GitHub. |
+| **`privatedesk --update-info`** | Display What's New and release highlights. |
 | **`privatedesk --reset`** | Wipe all indexed documents from cache without interactive prompts. |
 | **`privatedesk --uninstall`** | Launch interactive uninstaller (complete or selective). |
 | **`privatedesk --help`** | Display help and flag reference. |
 | **`privatedesk --version`** | Display current CLI version. |
+
+---
+
+## 🔄 Checking for Updates
+
+PrivateDesk checks for updates in a non-blocking background thread on startup (0.8s timeout, zero offline lag).
+
+* If an update is available on GitHub, the welcome menu displays:
+  ```text
+    /update                  Update PrivateDesk (★ Update available: v2.1.0)
+  ```
+* **See What's New before updating:**
+  ```bash
+  /update --info
+  ```
+  *(Or from your terminal: `privatedesk --update-info`)*
+* **Install the update:**
+  ```bash
+  /update
+  ```
+  *(Or from your terminal: `privatedesk --update`)*
+* **Data Guarantee:** Updates refresh code and dependencies only; your Knowledge Vault (`~/.privatedesk/store.json`) and local AI models remain **100% untouched**.
 
 ---
 

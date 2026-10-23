@@ -1,5 +1,5 @@
 # ==============================================================================
-# PrivateDesk — 1-Line Terminal CLI Installer for Windows (PowerShell 5.1+ / 7+)
+# PrivateDesk -- 1-Line Terminal CLI Installer for Windows (PowerShell 5.1+ / 7+)
 #   irm https://raw.githubusercontent.com/prabhsharan1/PrivateDesk/main/install.ps1 | iex
 # ==============================================================================
 # Everything lives inside a function so that `return` is used instead of `exit`
@@ -12,7 +12,7 @@ function Install-PrivateDesk {
 
     $RepoRaw = "https://raw.githubusercontent.com/prabhsharan1/PrivateDesk/main"
     $RepoGit = "https://github.com/prabhsharan1/PrivateDesk.git"
-    $AppFiles = @("cli.py", "parser.py", "retriever.py", "storage.py", "llm_engine.py", "requirements.txt")
+    $AppFiles = @("cli.py", "parser.py", "retriever.py", "storage.py", "llm_engine.py", "version.json", "requirements.txt")
 
     function Say($msg, $color = "Cyan") { Write-Host $msg -ForegroundColor $color }
     function Refresh-SessionPath {

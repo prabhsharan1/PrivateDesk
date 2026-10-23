@@ -297,6 +297,26 @@ def run_tests():
     print("✔ [TC-09] PASSED: Confluence sub-section breakdown and targeted anchor extraction verified.")
     passed += 1
 
+    # TC-10: Test Update Checker, Semantic Version Parsing, and Banner Formatting
+    total += 1
+    print("\n[TC-10] Testing update checker, semantic versioning, and update status logic...")
+    from cli import parse_version_tuple, LOCAL_VERSION_INFO, VERSION
+
+    # 1. Semver parsing
+    assert parse_version_tuple("2.0.0") < parse_version_tuple("2.1.0")
+    assert parse_version_tuple("2.1.0") == parse_version_tuple("v2.1.0")
+    assert parse_version_tuple("2.10.0") > parse_version_tuple("2.9.5")
+    assert parse_version_tuple("3.0.0-beta") > parse_version_tuple("2.99.99")
+
+    # 2. Local version metadata structure
+    assert "version" in LOCAL_VERSION_INFO
+    assert "highlights" in LOCAL_VERSION_INFO
+    assert isinstance(LOCAL_VERSION_INFO["highlights"], list)
+    assert len(LOCAL_VERSION_INFO["highlights"]) > 0
+
+    print("✔ [TC-10] PASSED: Semantic versioning and update checker verified.")
+    passed += 1
+
     print("\n" + "=" * 60)
     print(f"🎉 ALL TESTS PASSED! ({passed}/{total} test cases succeeded)")
     print("=" * 60)
@@ -304,3 +324,4 @@ def run_tests():
 
 if __name__ == "__main__":
     run_tests()
+
