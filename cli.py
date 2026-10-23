@@ -729,7 +729,14 @@ def handle_update(force: bool = False):
                 updated_ok = True
                 print(f"  {GREEN}✔ Git repository successfully updated.{RESET}")
             else:
-                print(f"  {YELLOW}⚠️ Git pull reported:{RESET} {res.stderr.strip() or res.stdout.strip()}")
+                # If pull failed due to local file modifications, sync cleanly to origin/main
+                subprocess.run(["git", "-C", str(app_dir), "fetch", "origin", "main"], capture_output=True, check=False)
+                res_reset = subprocess.run(["git", "-C", str(app_dir), "reset", "--hard", "origin/main"], capture_output=True, text=True)
+                if res_reset.returncode == 0:
+                    updated_ok = True
+                    print(f"  {GREEN}✔ Git repository successfully updated.{RESET}")
+                else:
+                    print(f"  {YELLOW}⚠️ Git pull reported:{RESET} {res.stderr.strip() or res.stdout.strip()}")
         except Exception as e:
             print(f"  {YELLOW}⚠️ Git pull failed ({e}); falling back to direct download.{RESET}")
 
