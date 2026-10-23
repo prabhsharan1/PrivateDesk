@@ -57,7 +57,7 @@ _update_check_done = False
 _update_thread = None
 
 def fetch_remote_version_info(timeout: float = 1.0):
-    """Fetches version.json from GitHub raw repository."""
+    """Fetches version.json from GitHub raw repository with GitHub API fallback."""
     try:
         req = urllib.request.Request(
             REMOTE_VERSION_URL,
@@ -68,6 +68,21 @@ def fetch_remote_version_info(timeout: float = 1.0):
                 return json.loads(resp.read().decode("utf-8"))
     except Exception:
         pass
+
+    # Fallback to GitHub API (which base64-decodes content if raw CDN is temporarily caching)
+    try:
+        import base64
+        api_url = "https://api.github.com/repos/prabhsharan1/PrivateDesk/contents/version.json"
+        req = urllib.request.Request(api_url, headers={"User-Agent": "PrivateDesk-CLI"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status == 200:
+                payload = json.loads(resp.read().decode("utf-8"))
+                if payload.get("encoding") == "base64" and payload.get("content"):
+                    raw_text = base64.b64decode(payload["content"]).decode("utf-8")
+                    return json.loads(raw_text)
+    except Exception:
+        pass
+
     return None
 
 def _async_update_worker():
