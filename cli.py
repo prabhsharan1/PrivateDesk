@@ -212,11 +212,11 @@ def print_banner(retriever: DocumentRetriever):
     status, info = get_update_status(wait_timeout=0.4)
     if status == "available":
         remote_v = info.get("version", "")
-        update_line = f"  {YELLOW}/update{RESET}                  Update PrivateDesk {GREEN}(★ Update available: v{remote_v}){RESET}"
+        update_line = f"  {YELLOW}/update{RESET}                Update PrivateDesk {GREEN}(★ Update available: v{remote_v}){RESET}"
     elif status == "up_to_date":
-        update_line = f"  {YELLOW}/update{RESET}                  Update PrivateDesk {DIM}(Up to date){RESET}"
+        update_line = f"  {YELLOW}/update{RESET}                Update PrivateDesk {DIM}(Up to date){RESET}"
     else:
-        update_line = f"  {YELLOW}/update{RESET}                  Check for updates / update PrivateDesk"
+        update_line = f"  {YELLOW}/update{RESET}                Check for updates / update PrivateDesk"
 
     print(f"\n{BOLD}⚡ Quick Commands:{RESET}")
     print(f"  {YELLOW}/upload <path or url>{RESET}   Index PDF, PPTX, or Confluence / web URL")
