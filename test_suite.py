@@ -317,6 +317,60 @@ def run_tests():
     print("✔ [TC-10] PASSED: Semantic versioning and update checker verified.")
     passed += 1
 
+    # TC-11: Test Multi-Terminal Shared Vault Sync & Stale State Prevention
+    total += 1
+    print("\n[TC-11] Testing multi-terminal shared vault sync & stale state prevention...")
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=True) as tmp_file:
+        shared_store_path = Path(tmp_file.name)
+
+    try:
+        # 1. Terminal A starts and indexes doc1
+        term_a = DocumentRetriever(persistent=True, store_file=shared_store_path)
+        term_a.add_document("doc1.pdf", [{"page": 1, "text": "Original Policy from doc1"}])
+        assert len(term_a.list_documents()) == 1
+
+        # 2. Terminal B starts concurrently and loads snapshot containing doc1
+        term_b = DocumentRetriever(persistent=True, store_file=shared_store_path)
+        assert len(term_b.list_documents()) == 1
+        assert term_b.list_documents()[0]["filename"] == "doc1.pdf"
+
+        # 3. User runs /clear in Terminal A (purges disk and memory)
+        term_a.clear_all()
+        assert len(term_a.list_documents()) == 0
+
+        # 4. User uploads doc2 in Terminal B (stale snapshot should NOT resurrect doc1)
+        term_b.add_document("doc2.pdf", [{"page": 1, "text": "New Guidelines from doc2"}])
+
+        # Terminal B must have ONLY doc2, not resurrected doc1
+        docs_b = term_b.list_documents()
+        assert len(docs_b) == 1, f"Expected 1 document, found {len(docs_b)}: {[d['filename'] for d in docs_b]}"
+        assert docs_b[0]["filename"] == "doc2.pdf", f"Expected doc2.pdf, found {docs_b[0]['filename']}"
+
+        # On-disk store must have ONLY doc2
+        disk_docs, disk_chunks = load_store(shared_store_path)
+        assert list(disk_docs.keys()) == ["doc2.pdf"], f"Disk still contains cleared docs: {list(disk_docs.keys())}"
+
+        # 5. Terminal A queries or searches: must automatically see doc2 added by Terminal B
+        hits_a = term_a.search("Guidelines", top_k=1)
+        assert len(hits_a) == 1, "Terminal A should automatically search freshly synced doc2 from disk"
+        assert hits_a[0]["filename"] == "doc2.pdf"
+
+        # 6. Concurrent upload merge test: Terminal A adds doc3, then Terminal B adds doc4
+        term_a.add_document("doc3.pdf", [{"page": 1, "text": "Third document from term A"}])
+        term_b.add_document("doc4.pdf", [{"page": 1, "text": "Fourth document from term B"}])
+
+        final_docs_b = [d["filename"] for d in term_b.list_documents()]
+        assert "doc2.pdf" in final_docs_b
+        assert "doc3.pdf" in final_docs_b
+        assert "doc4.pdf" in final_docs_b
+        assert len(final_docs_b) == 3, f"Expected 3 merged documents, got: {final_docs_b}"
+
+        print("✔ [TC-11] PASSED: Multi-terminal sync verified (cleared docs never resurrected, concurrent uploads merge cleanly).")
+        passed += 1
+
+    finally:
+        clear_store(shared_store_path)
+
     print("\n" + "=" * 60)
     print(f"🎉 ALL TESTS PASSED! ({passed}/{total} test cases succeeded)")
     print("=" * 60)
@@ -324,4 +378,5 @@ def run_tests():
 
 if __name__ == "__main__":
     run_tests()
+
 

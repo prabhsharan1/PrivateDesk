@@ -2,20 +2,24 @@
 Document Chunk Store & Hybrid Retriever for PrivateDesk CLI.
 Slices document pages into chunks and performs fast, zero-dependency hybrid search
 (exact keyword/acronym boost + term frequency similarity).
-Supports persistent caching across terminal sessions via storage.py.
+Supports persistent caching across terminal sessions via storage.py,
+with multi-terminal concurrency and stale-state detection.
 """
 
 import re
 import math
+from pathlib import Path
 from collections import Counter
-from storage import save_store, load_store, clear_store
+from storage import save_store, load_store, clear_store, get_store_mtime, DEFAULT_STORE_FILE
 
 
 class DocumentRetriever:
-    def __init__(self, chunk_size: int = 400, chunk_overlap: int = 50, persistent: bool = True):
+    def __init__(self, chunk_size: int = 400, chunk_overlap: int = 50, persistent: bool = True, store_file: Path = DEFAULT_STORE_FILE):
         self.chunk_size = chunk_size        # in words
         self.chunk_overlap = chunk_overlap  # in words
         self.persistent = persistent
+        self.store_file = store_file
+        self.last_loaded_mtime: float = 0.0
         self.chunks: list[dict] = []
         self.documents: dict[str, dict] = {} # filename -> metadata
 
@@ -23,8 +27,10 @@ class DocumentRetriever:
             self.load_from_disk()
 
     def load_from_disk(self):
-        """Loads cached documents and chunks from persistent storage."""
-        docs, raw_chunks = load_store()
+        """Loads cached documents and chunks from persistent storage and updates last_loaded_mtime."""
+        if not self.persistent:
+            return
+        docs, raw_chunks = load_store(self.store_file)
         self.documents = docs
         self.chunks = []
         for c in raw_chunks:
@@ -41,6 +47,34 @@ class DocumentRetriever:
                 "tokens": tokens,
                 "token_counts": token_counts
             })
+        self.last_loaded_mtime = get_store_mtime(self.store_file)
+
+    def _ensure_fresh_state(self):
+        """
+        Synchronizes memory with persistent storage if another terminal modified or cleared it.
+        - If store.json was removed/cleared on disk: flushes stale in-memory documents.
+        - If store.json was updated on disk: reloads fresh state.
+        """
+        if not self.persistent:
+            return
+
+        current_mtime = get_store_mtime(self.store_file)
+
+        # Case 1: store.json does not exist on disk
+        if current_mtime == 0.0:
+            if self.last_loaded_mtime != 0.0 or self.documents or self.chunks:
+                self.chunks.clear()
+                self.documents.clear()
+                self.last_loaded_mtime = 0.0
+            return
+
+        # Case 2: store.json was modified on disk by another process
+        if current_mtime != self.last_loaded_mtime:
+            self.load_from_disk()
+
+    def ensure_fresh_state(self):
+        """Public method to ensure memory state matches disk."""
+        self._ensure_fresh_state()
 
     def _sync_to_disk(self):
         """Persists current memory state to disk if persistence is enabled."""
@@ -58,7 +92,8 @@ class DocumentRetriever:
                 "text": c["text"],
                 "tokens": c["tokens"]
             })
-        save_store(self.documents, serializable_chunks)
+        save_store(self.documents, serializable_chunks, self.store_file)
+        self.last_loaded_mtime = get_store_mtime(self.store_file)
 
     def chunk_text(self, text: str) -> list[str]:
         """Splits text into chunks of specified word count with overlap."""
@@ -79,6 +114,9 @@ class DocumentRetriever:
 
     def add_document(self, filename: str, pages: list[dict], doc_type: str = "file", url: str | None = None):
         """Indexes all pages/sections from a parsed document."""
+        # Refresh against disk first to avoid resurrecting cleared documents or clobbering concurrent uploads
+        self._ensure_fresh_state()
+
         # Remove previous version if re-uploaded
         self.remove_document(filename, sync=False)
 
@@ -121,6 +159,8 @@ class DocumentRetriever:
 
     def remove_document(self, filename: str, sync: bool = True):
         """Removes all chunks associated with a filename."""
+        if sync:
+            self._ensure_fresh_state()
         self.chunks = [c for c in self.chunks if c["filename"] != filename]
         if filename in self.documents:
             del self.documents[filename]
@@ -131,11 +171,13 @@ class DocumentRetriever:
         """Purges all documents and chunks from memory and persistent disk store."""
         self.chunks.clear()
         self.documents.clear()
+        self.last_loaded_mtime = 0.0
         if self.persistent:
-            clear_store()
+            clear_store(self.store_file)
 
     def list_documents(self) -> list[dict]:
-        """Returns summary of all loaded documents."""
+        """Returns summary of all loaded documents, refreshed from disk."""
+        self._ensure_fresh_state()
         return list(self.documents.values())
 
     def _tokenize(self, text: str) -> list[str]:
@@ -147,6 +189,7 @@ class DocumentRetriever:
         Hybrid search across all indexed chunks.
         Combines exact acronym/phrase matching with TF-IDF keyword relevance.
         """
+        self._ensure_fresh_state()
         if not self.chunks:
             return []
 

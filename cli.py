@@ -830,6 +830,7 @@ def answer_query(query: str, retriever: DocumentRetriever, engine: LLMEngine):
     if not query:
         return
 
+    retriever.ensure_fresh_state()
     if not retriever.chunks:
         print(f"\n{YELLOW}⚠️ No documents are currently loaded in your vault.{RESET}")
         print(f"Please use {CYAN}/upload <file or url>{RESET} to index training materials first.\n")
