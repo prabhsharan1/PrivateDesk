@@ -6,6 +6,8 @@ Supports persistent caching across terminal sessions via storage.py,
 with multi-terminal concurrency and stale-state detection.
 """
 
+from __future__ import annotations
+
 import re
 import math
 from pathlib import Path
@@ -180,6 +182,16 @@ class DocumentRetriever:
         self._ensure_fresh_state()
         return list(self.documents.values())
 
+    STOPWORDS = {
+        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+        "to", "of", "in", "for", "on", "with", "at", "by", "from", "as",
+        "into", "about", "what", "how", "why", "when", "where", "who", "which",
+        "do", "does", "did", "can", "could", "should", "would", "will",
+        "my", "our", "your", "their", "this", "that", "these", "those",
+        "it", "its", "and", "or", "if", "so", "me", "we", "us", "i", "you",
+        "he", "she", "they", "them", "his", "her"
+    }
+
     def _tokenize(self, text: str) -> list[str]:
         """Tokenize text into lowercase words/alphanumerics, preserving acronyms."""
         return [t.lower() for t in re.findall(r"\b[\w\.\-]+\b", text)]
@@ -193,12 +205,18 @@ class DocumentRetriever:
         if not self.chunks:
             return []
 
-        query_tokens = self._tokenize(query)
-        if not query_tokens:
+        all_query_tokens = self._tokenize(query)
+        if not all_query_tokens:
             return []
 
-        # Find raw terms for exact matching (e.g., "WatIAM", "eduroam")
-        raw_query_words = [w.strip() for w in query.split() if len(w.strip()) > 1]
+        filtered_tokens = [t for t in all_query_tokens if t not in self.STOPWORDS]
+        query_tokens = filtered_tokens if filtered_tokens else all_query_tokens
+
+        # Find raw terms for exact matching (e.g., "WatIAM", "eduroam"), stripping punctuation
+        cleaned_raw = [w.strip(".,!?;:\"'()[]{}") for w in query.split()]
+        all_raw_words = [w for w in cleaned_raw if len(w) > 1]
+        filtered_raw = [w for w in all_raw_words if w.lower() not in self.STOPWORDS]
+        raw_query_words = filtered_raw if filtered_raw else all_raw_words
 
         scores = []
         for chunk in self.chunks:
@@ -210,11 +228,12 @@ class DocumentRetriever:
             if not chunk_tokens:
                 continue
 
-            # 1. Exact match / Acronym boost
+            # 1. Exact match / Acronym boost (word-boundary aware so short words don't match substrings)
             for word in raw_query_words:
-                if word in chunk_text:
+                pattern = r"(?<!\w)" + re.escape(word) + r"(?!\w)"
+                if re.search(pattern, chunk_text):
                     score += 5.0
-                elif word.lower() in chunk_text.lower():
+                elif word.lower() in token_counts or re.search(pattern, chunk_text, flags=re.IGNORECASE):
                     score += 2.0
 
             # 2. Term Frequency (TF)

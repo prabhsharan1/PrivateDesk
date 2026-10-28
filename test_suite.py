@@ -117,9 +117,20 @@ def run_tests():
     sample_context = [
         {"filename": "Policy.pdf", "page": 3, "text": "MacBook loan duration is strictly 7 days per student."}
     ]
-    reply, sources = engine.generate("How long can a student borrow a MacBook?", sample_context)
+    if engine.is_ollama_online() or (os.environ.get("PRIVATEDESK_SKIP_OLLAMA") != "1" and engine.start_ollama()):
+        reply, sources = engine.generate("How long can a student borrow a MacBook?", sample_context)
+        assert "7" in reply or "seven" in reply.lower(), f"Unexpected reply: {reply}"
+    else:
+        from unittest import mock
+        with mock.patch.object(engine, "_query_ollama", return_value="Students can borrow a MacBook for 7 days [Source: Policy.pdf, Page 3]."):
+            reply, sources = engine.generate("How long can a student borrow a MacBook?", sample_context)
+        assert "7" in reply, f"Unexpected mocked reply: {reply}"
+        # Also verify graceful offline fallback does not hang when daemon is unreachable
+        with mock.patch.object(engine, "auto_provision_ai_engine", return_value=False):
+            offline_reply, offline_sources = engine.generate("How long can a student borrow a MacBook?", sample_context)
+            assert "Local AI Engine is Offline" in offline_reply
+            assert len(offline_sources) == 1
 
-    assert "7" in reply or "seven" in reply.lower(), f"Unexpected reply: {reply}"
     assert len(sources) == 1
     assert sources[0]["filename"] == "Policy.pdf"
     assert sources[0]["page"] == 3
@@ -261,12 +272,24 @@ def run_tests():
     """
 
     from parser import DocumentParser
-    # 1. Test full article ingestion with sub-parts
-    full_doc = DocumentParser.parse_url("https://confluence.example.com/wiki/it-policies", html_content=mock_confluence_html)
+    # 1. Test full article ingestion with sub-parts, inline tags, and nested ignored containers
+    rich_html = (
+        mock_confluence_html
+        .replace("<body>", '<body><header><div class="logo"><div>Header Nav</div></div></header><ul class="breadcrumbs"><li>Home</li></ul><div class="toc-macro"><div>TOC Item</div></div>')
+        .replace("Information Support & Technology", "<strong>Information Support & Technology</strong>")
+        .replace("Service Desk", '<a href="/desk">Service Desk</a>')
+    )
+    full_doc = DocumentParser.parse_url("https://confluence.example.com/wiki/it-policies?pageId=42", html_content=rich_html)
     assert full_doc["doc_title"] == "IST Department Policies & Services", f"Title mismatch: {full_doc['doc_title']}"
     assert len(full_doc["sections"]) == 4, f"Expected 4 sections, got {len(full_doc['sections'])}"
+    assert "Welcome to the Information Support & Technology (IST) service directory." in full_doc["sections"][0]["text"], (
+        f"Inline tags split paragraph: {full_doc['sections'][0]['text']!r}"
+    )
+    assert "Header Nav" not in full_doc["sections"][0]["text"] and "TOC Item" not in full_doc["sections"][0]["text"]
     assert full_doc["sections"][1]["title"] == "Laptop Loan Program"
+    assert "Students can borrow laptops from the Service Desk located in Student Mall." in full_doc["sections"][1]["text"]
     assert "| Device | Max Days | Renewal |" in full_doc["sections"][1]["text"]
+    assert full_doc["sections"][1]["url"] == "https://confluence.example.com/wiki/it-policies?pageId=42#laptop-loans"
 
     # 2. Test targeted anchor link extraction
     targeted_doc = DocumentParser.parse_url("https://confluence.example.com/wiki/it-policies#laptop-loans", html_content=mock_confluence_html)
@@ -370,6 +393,67 @@ def run_tests():
 
     finally:
         clear_store(shared_store_path)
+
+    # TC-12: Hardening regressions (no-context guard, file permissions, web fetch limits)
+    total += 1
+    print("\n[TC-12] Testing hardening: no-context guard, store permissions, web fetch limits...")
+    import stat
+    from unittest import mock
+    from llm_engine import NOT_FOUND_REPLY
+    from parser import DocumentParser
+
+    # 1. Nothing retrieved -> deterministic reply, model is never called
+    guard_engine = LLMEngine()
+    with mock.patch.object(guard_engine, "_query_ollama", side_effect=AssertionError("model must not be called")):
+        reply, srcs = guard_engine.generate("anything", [])
+    assert reply == NOT_FOUND_REPLY and srcs == [], "Empty retrieval must short-circuit"
+
+    # 2. store.json is owner-only on POSIX
+    if os.name != "nt":
+        perm_dir = Path(tempfile.mkdtemp())
+        perm_file = perm_dir / "store.json"
+        save_store({}, [], perm_file)
+        mode = stat.S_IMODE(perm_file.stat().st_mode)
+        assert mode == 0o600, f"store.json should be 0600, got {oct(mode)}"
+        clear_store(perm_file)
+
+    # 3. Web fetch rejects non-HTML and oversized bodies
+    class FakeResp:
+        status_code = 200
+        encoding = "utf-8"
+
+        def __init__(self, content_type, chunks):
+            self.headers = {"Content-Type": content_type}
+            self._chunks = chunks
+
+        def iter_content(self, chunk_size=65536):
+            return iter(self._chunks)
+
+        def close(self):
+            pass
+
+    with mock.patch("requests.get", return_value=FakeResp("application/pdf", [b"%PDF"])):
+        try:
+            DocumentParser.parse_url("https://example.com/file.pdf")
+            assert False, "PDF link should be rejected"
+        except ValueError as e:
+            assert "not a web page" in str(e) and "/upload" in str(e)
+
+    big_chunks = [b"a" * 1024 * 1024] * 6  # 6 MB
+    with mock.patch("requests.get", return_value=FakeResp("text/html; charset=utf-8", big_chunks)):
+        try:
+            DocumentParser.parse_url("https://example.com/huge")
+            assert False, "Oversized page should be rejected"
+        except ValueError as e:
+            assert "too large" in str(e)
+
+    # 4. Stopword & punctuation filtering in search (unrelated queries return empty, trailing '?' still boosts acronyms)
+    assert retriever.search("What is the recipe for chocolate cake?") == [], "Unrelated stopword query should return no matches"
+    punct_results = retriever.search("How do I reset WatIAM?")
+    assert len(punct_results) > 0 and punct_results[0]["page"] == 2 and punct_results[0]["score"] > 5.0
+
+    print("✔ [TC-12] PASSED: No-context guard, 0600 store permissions, web fetch limits, and search precision verified.")
+    passed += 1
 
     print("\n" + "=" * 60)
     print(f"🎉 ALL TESTS PASSED! ({passed}/{total} test cases succeeded)")

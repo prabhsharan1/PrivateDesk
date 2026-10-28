@@ -9,6 +9,8 @@ Optimized for local LLM inference (Qwen 2.5):
 - Resilient fallback: pypdf (pure Python layout extraction).
 """
 
+from __future__ import annotations
+
 import os
 import re
 from html.parser import HTMLParser
@@ -259,12 +261,19 @@ class DocumentParser:
         slides_content = []
         try:
             prs = Presentation(file_path)
+            def _iter_shapes(shapes):
+                for shp in shapes:
+                    if hasattr(shp, "shapes"):
+                        yield from _iter_shapes(shp.shapes)
+                    else:
+                        yield shp
+
             for slide_num, slide in enumerate(prs.slides, start=1):
                 slide_text = []
 
-                # Extract text and tables from slide shapes
-                for shape in slide.shapes:
-                    if shape.has_table:
+                # Extract text and tables from slide shapes (including grouped shapes)
+                for shape in _iter_shapes(slide.shapes):
+                    if getattr(shape, "has_table", False):
                         rows_data = []
                         for row in shape.table.rows:
                             rows_data.append([cell.text.strip().replace("\n", " ") for cell in row.cells])
@@ -310,25 +319,42 @@ class DocumentParser:
         parsed_url = urlparse(url)
         fragment = parsed_url.fragment.strip().lower() if parsed_url.fragment else None
         base_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}"
+        if parsed_url.query:
+            base_url = f"{base_url}?{parsed_url.query}"
 
         if html_content is None:
             try:
                 headers = {
                     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 PrivateDesk/2.0"
                 }
-                res = requests.get(url, headers=headers, timeout=15)
-                if res.status_code in (401, 403):
-                    raise ValueError(
-                        f"Access Denied (HTTP {res.status_code}) for '{url}'. "
-                        "If this is a private Confluence wiki or intranet page, it must be accessible from your current network/VPN without browser session login."
-                    )
-                elif res.status_code == 404:
-                    raise ValueError(f"Page not found (HTTP 404): '{url}'.")
-                elif res.status_code != 200:
-                    raise ValueError(f"HTTP error {res.status_code} when fetching '{url}'.")
+                res = requests.get(url, headers=headers, timeout=15, stream=True)
+                try:
+                    if res.status_code in (401, 403):
+                        raise ValueError(
+                            f"Access Denied (HTTP {res.status_code}) for '{url}'. "
+                            "If this is a private Confluence wiki or intranet page, it must be accessible from your current network/VPN without browser session login."
+                        )
+                    elif res.status_code == 404:
+                        raise ValueError(f"Page not found (HTTP 404): '{url}'.")
+                    elif res.status_code != 200:
+                        raise ValueError(f"HTTP error {res.status_code} when fetching '{url}'.")
 
-                res.encoding = res.apparent_encoding or "utf-8"
-                html_text = res.text
+                    content_type = res.headers.get("Content-Type", "").lower()
+                    if content_type and not any(t in content_type for t in ("html", "xml", "text/plain")):
+                        hint = " Download it and use /upload <file path> instead." if ("pdf" in content_type or "presentation" in content_type) else ""
+                        raise ValueError(f"'{url}' is not a web page (content type: {content_type.split(';')[0]}).{hint}")
+
+                    max_bytes = 5 * 1024 * 1024  # 5 MB is far beyond any real article
+                    body = bytearray()
+                    for piece in res.iter_content(chunk_size=65536):
+                        body.extend(piece)
+                        if len(body) > max_bytes:
+                            raise ValueError(f"'{url}' is too large to index as a web page (over 5 MB).")
+
+                    encoding = res.encoding if res.encoding and "charset" in content_type else None
+                    html_text = bytes(body).decode(encoding or "utf-8", errors="replace")
+                finally:
+                    res.close()
             except requests.exceptions.Timeout:
                 raise ValueError(f"Connection timed out while trying to reach '{url}'.")
             except requests.exceptions.ConnectionError:
@@ -434,12 +460,20 @@ class ConfluenceHTMLParser(HTMLParser):
         self.doc_title = ""
         self.in_title = False
 
-        # Tags to ignore completely
+        # Tags to ignore completely (tracked via stack so nested divs/tags never desync)
         self.ignored_tags = {
             "script", "style", "nav", "header", "footer", "aside",
             "noscript", "svg", "form", "button", "iframe"
         }
-        self.ignore_depth = 0
+        self.void_tags = {
+            "area", "base", "br", "col", "embed", "hr", "img",
+            "input", "link", "meta", "param", "source", "track", "wbr"
+        }
+        self.block_tags = {
+            "p", "div", "section", "article", "main", "blockquote",
+            "pre", "dl", "dt", "dd", "hr", "br"
+        }
+        self.ignore_stack: list[str] = []
 
         # Heading tracking
         self.heading_tags = {"h1", "h2", "h3", "h4"}
@@ -454,6 +488,7 @@ class ConfluenceHTMLParser(HTMLParser):
             "anchors": [],
             "lines": []
         }
+        self.current_block: list[str] = []
 
         # Table tracking
         self.in_table = False
@@ -466,21 +501,30 @@ class ConfluenceHTMLParser(HTMLParser):
         self.in_list_item = False
         self.current_li = []
 
+    def _flush_block(self):
+        """Flushes accumulated inline paragraph/block text as a single line."""
+        if self.current_block:
+            block_text = re.sub(r"\s+", " ", "".join(self.current_block)).strip()
+            if block_text:
+                self.current_section["lines"].append(block_text)
+            self.current_block = []
+
     def handle_starttag(self, tag, attrs):
+        if self.ignore_stack:
+            if tag not in self.void_tags:
+                self.ignore_stack.append(tag)
+            return
+
         attrs_dict = dict(attrs)
         tag_id = attrs_dict.get("id") or attrs_dict.get("name")
-        classes = attrs_dict.get("class", "").lower()
+        classes = (attrs_dict.get("class") or "").lower()
 
         # Ignore Confluence/wiki sidebars, TOC macros, and breadcrumb navigation
-        if any(c in classes for c in ["toc-macro", "table-of-contents", "breadcrumbs", "page-metadata", "header-actions"]):
-            self.ignore_depth += 1
-            return
-
-        if tag in self.ignored_tags:
-            self.ignore_depth += 1
-            return
-
-        if self.ignore_depth > 0:
+        if tag in self.ignored_tags or any(
+            c in classes for c in ["toc-macro", "table-of-contents", "breadcrumbs", "page-metadata", "header-actions"]
+        ):
+            if tag not in self.void_tags:
+                self.ignore_stack.append(tag)
             return
 
         if tag == "title":
@@ -488,6 +532,7 @@ class ConfluenceHTMLParser(HTMLParser):
             return
 
         if tag in self.heading_tags:
+            self._flush_block()
             self.current_heading_tag = tag
             self.current_heading_text = []
             self.current_heading_anchors = []
@@ -503,6 +548,7 @@ class ConfluenceHTMLParser(HTMLParser):
                 self.current_section["anchors"].append(tag_id.lower())
 
         if tag == "table":
+            self._flush_block()
             self.in_table = True
             self.table_rows = []
 
@@ -513,19 +559,28 @@ class ConfluenceHTMLParser(HTMLParser):
             self.current_cell = []
 
         elif tag in ("ul", "ol"):
+            self._flush_block()
+            if self.in_list_item and self.current_li:
+                li_text = re.sub(r"\s+", " ", "".join(self.current_li)).strip()
+                if li_text:
+                    indent = "  " * max(0, self.list_depth - 1)
+                    self.current_section["lines"].append(f"{indent}- {li_text}")
+                self.current_li = []
             self.list_depth += 1
 
         elif tag == "li":
+            self._flush_block()
             self.in_list_item = True
             self.current_li = []
 
-    def handle_endtag(self, tag):
-        if tag in self.ignored_tags or tag in ("div", "section"):
-            if self.ignore_depth > 0:
-                self.ignore_depth -= 1
-                return
+        elif tag in self.block_tags and not self.in_table and not self.in_list_item:
+            self._flush_block()
 
-        if self.ignore_depth > 0:
+    def handle_endtag(self, tag):
+        if self.ignore_stack:
+            if tag in self.ignore_stack:
+                idx = len(self.ignore_stack) - 1 - self.ignore_stack[::-1].index(tag)
+                del self.ignore_stack[idx:]
             return
 
         if tag == "title":
@@ -533,8 +588,9 @@ class ConfluenceHTMLParser(HTMLParser):
             return
 
         if tag in self.heading_tags and tag == self.current_heading_tag:
-            heading_title = "".join(self.current_heading_text).strip()
+            heading_title = re.sub(r"\s+", " ", "".join(self.current_heading_text)).strip()
             if heading_title:
+                self._flush_block()
                 if self.current_section["lines"] or self.current_section["title"] != "Overview":
                     self.sections.append(self.current_section)
 
@@ -564,7 +620,7 @@ class ConfluenceHTMLParser(HTMLParser):
             self.current_row = []
 
         elif tag in ("td", "th") and self.in_table:
-            cell_text = "".join(self.current_cell).strip().replace("\n", " ")
+            cell_text = re.sub(r"\s+", " ", "".join(self.current_cell)).strip()
             self.current_row.append(cell_text)
             self.current_cell = []
 
@@ -574,20 +630,21 @@ class ConfluenceHTMLParser(HTMLParser):
 
         elif tag == "li" and self.in_list_item:
             self.in_list_item = False
-            li_text = "".join(self.current_li).strip()
+            li_text = re.sub(r"\s+", " ", "".join(self.current_li)).strip()
             if li_text:
                 indent = "  " * max(0, self.list_depth - 1)
                 self.current_section["lines"].append(f"{indent}- {li_text}")
             self.current_li = []
 
-        elif tag == "p":
-            self.current_section["lines"].append("")
+        elif tag in self.block_tags and not self.in_table and not self.in_list_item:
+            self._flush_block()
+            if tag == "p":
+                self.current_section["lines"].append("")
 
     def handle_data(self, data):
-        if self.ignore_depth > 0:
+        if self.ignore_stack:
             return
 
-        text = data.strip()
         if self.in_title:
             self.doc_title += data
             return
@@ -604,11 +661,14 @@ class ConfluenceHTMLParser(HTMLParser):
             self.current_li.append(data)
             return
 
-        if text:
-            self.current_section["lines"].append(text)
+        if data.strip():
+            self.current_block.append(data)
+        elif self.current_block:
+            self.current_block.append(" ")
 
     def close(self):
         super().close()
+        self._flush_block()
         if self.current_section["lines"] or self.current_section["title"] != "Overview":
             self.sections.append(self.current_section)
 

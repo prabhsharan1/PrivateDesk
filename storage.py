@@ -4,6 +4,8 @@ Saves and loads indexed documents and chunks across terminal sessions in ~/.priv
 Supports process-safe atomic writes and multi-terminal freshness checks.
 """
 
+from __future__ import annotations
+
 import os
 import json
 import time
@@ -35,6 +37,7 @@ def save_store(documents: dict, chunks: list, store_file: Path = DEFAULT_STORE_F
     concurrent terminals from colliding.
     """
     ensure_storage_dir(store_file.parent)
+    prev_mtime = get_store_mtime(store_file)
     data = {
         "version": "1.0",
         "updated_at": time.time(),
@@ -46,6 +49,16 @@ def save_store(documents: dict, chunks: list, store_file: Path = DEFAULT_STORE_F
     try:
         with open(temp_file, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+        try:
+            os.chmod(temp_file, 0o600)  # owner-only (no-op on Windows)
+        except OSError:
+            pass
+        try:
+            if prev_mtime > 0 and temp_file.stat().st_mtime <= prev_mtime:
+                bumped = prev_mtime + 0.001
+                os.utime(temp_file, (bumped, bumped))
+        except OSError:
+            pass
         os.replace(temp_file, store_file)
     finally:
         if temp_file.exists():

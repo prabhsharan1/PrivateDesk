@@ -370,7 +370,10 @@ When prompted, you can select:
 
 ## 🔒 Security & Privacy Guarantees
 
-* **Zero Network Calls:** Runs entirely on `localhost`. Disconnect your Mac from Wi-Fi or Ethernet—PrivateDesk continues to work identically.
+* **Your Documents & Questions Never Leave Your Machine:** Inference runs entirely on `localhost`. Disconnect from Wi-Fi or Ethernet and asking questions about your indexed documents works identically.
+* **The Only Network Activity (both optional):**
+  * A tiny, anonymous update check against GitHub (`version.json`) when you open the interactive assistant. It sends no document or prompt data. Turn it off with `PRIVATEDESK_NO_UPDATE_CHECK=1`. One-shot and piped queries never make this call.
+  * Fetching a web/Confluence link only when *you* paste or `/upload` a URL.
 * **No Telemetry or Logging:** Prompts and documents are never sent to external servers or logged in the cloud.
 * **Static Model Weights:** The local Qwen 2.5 model is strictly read-only. It cannot and does not retain, memorize, or train on your private documents.
 * **Persistent Cache Isolation:** Stored locally in `~/.privatedesk/store.json` with user-only permissions.

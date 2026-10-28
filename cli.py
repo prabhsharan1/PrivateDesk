@@ -5,6 +5,8 @@ Inspired by Claude Code and Ollama.
 Zero cloud telemetry. Zero token limits. Fast on Apple Silicon.
 """
 
+from __future__ import annotations
+
 import sys
 import os
 import re
@@ -93,8 +95,10 @@ def _async_update_worker():
         _update_check_done = True
 
 def start_background_update_check():
-    """Starts non-blocking background thread to check for updates."""
+    """Starts non-blocking background thread to check for updates (skipped if PRIVATEDESK_NO_UPDATE_CHECK=1)."""
     global _update_thread
+    if os.environ.get("PRIVATEDESK_NO_UPDATE_CHECK", "").strip() in ("1", "true", "yes"):
+        return
     _update_thread = threading.Thread(target=_async_update_worker, daemon=True)
     _update_thread.start()
 
@@ -186,8 +190,9 @@ def setup_autocomplete():
                 return options[state] + " "
             return None
 
+        readline.set_completer_delims(" \t\n")
         readline.set_completer(completer)
-        if "libedit" in readline.__doc__:
+        if "libedit" in (getattr(readline, "__doc__", "") or ""):
             readline.parse_and_bind("bind ^I rl_complete")
         else:
             readline.parse_and_bind("tab: complete")
@@ -590,10 +595,14 @@ def handle_uninstall():
             rc_path = home / rc_name
             if rc_path.exists():
                 try:
-                    lines = rc_path.read_text(encoding="utf-8").splitlines()
-                    filtered = [l for l in lines if "PrivateDesk CLI" not in l and '.local/bin' not in l]
-                    if len(filtered) != len(lines):
-                        rc_path.write_text("\n".join(filtered) + "\n", encoding="utf-8")
+                    content = rc_path.read_text(encoding="utf-8")
+                    if "PrivateDesk CLI" in content:
+                        lines = content.splitlines()
+                        filtered = [
+                            l for l in lines
+                            if "PrivateDesk CLI" not in l and l.strip() != 'export PATH="$HOME/.local/bin:$PATH"'
+                        ]
+                        rc_path.write_text("\n".join(filtered) + ("\n" if filtered else ""), encoding="utf-8")
                         print(f"{GREEN}✔ Cleaned PATH entry from:{RESET} ~/{rc_name}")
                 except Exception:
                     pass
@@ -679,7 +688,7 @@ def handle_update_info():
         print("")
 
 
-def handle_update(force: bool = False):
+def handle_update(force: bool = False, in_repl: bool = True):
     """Updates PrivateDesk to the latest version while preserving vault data."""
     print(f"\n{CYAN}🔄 Checking for updates from GitHub...{RESET}")
     remote_info = fetch_remote_version_info(timeout=3.5)
@@ -717,48 +726,78 @@ def handle_update(force: bool = False):
     repo_raw = "https://raw.githubusercontent.com/prabhsharan1/PrivateDesk/main"
     update_files = ["cli.py", "parser.py", "retriever.py", "storage.py", "llm_engine.py", "version.json", "requirements.txt"]
 
+    # Only the installer-managed copy may be force-synced. A developer's own clone must never be reset.
+    managed_dir = (Path.home() / ".privatedesk" / "app").resolve()
+    is_managed = app_dir == managed_dir
+    is_git_checkout = (app_dir / ".git").is_dir()
+
     print(f"\n{CYAN}📥 Updating PrivateDesk components in:{RESET} {app_dir}")
 
     updated_ok = False
     # Attempt 1: Git pull if running from a git repository
-    if (app_dir / ".git").is_dir() and shutil.which("git"):
+    if is_git_checkout and shutil.which("git"):
         try:
             print(f"  {CYAN}⚙️ Pulling latest changes via git...{RESET}")
             res = subprocess.run(["git", "-C", str(app_dir), "pull", "--ff-only"], capture_output=True, text=True)
             if res.returncode == 0:
                 updated_ok = True
                 print(f"  {GREEN}✔ Git repository successfully updated.{RESET}")
-            else:
-                # If pull failed due to local file modifications, sync cleanly to origin/main
-                subprocess.run(["git", "-C", str(app_dir), "fetch", "origin", "main"], capture_output=True, check=False)
-                res_reset = subprocess.run(["git", "-C", str(app_dir), "reset", "--hard", "origin/main"], capture_output=True, text=True)
-                if res_reset.returncode == 0:
-                    updated_ok = True
-                    print(f"  {GREEN}✔ Git repository successfully updated.{RESET}")
+            elif is_managed:
+                # Installer-managed copy: safe to sync cleanly to origin/main ONLY if fetch succeeds
+                res_fetch = subprocess.run(["git", "-C", str(app_dir), "fetch", "origin", "main"], capture_output=True, text=True)
+                if res_fetch.returncode == 0:
+                    res_reset = subprocess.run(["git", "-C", str(app_dir), "reset", "--hard", "origin/main"], capture_output=True, text=True)
+                    if res_reset.returncode == 0:
+                        updated_ok = True
+                        print(f"  {GREEN}✔ Git repository successfully updated.{RESET}")
+                    else:
+                        print(f"  {YELLOW}⚠️ Git reset reported:{RESET} {res_reset.stderr.strip() or res_reset.stdout.strip()}")
                 else:
-                    print(f"  {YELLOW}⚠️ Git pull reported:{RESET} {res.stderr.strip() or res.stdout.strip()}")
+                    print(f"  {YELLOW}⚠️ Git fetch failed; falling back to direct download.{RESET}")
+            else:
+                print(f"  {YELLOW}⚠️ This looks like your own git clone with local changes, so it was left untouched.{RESET}")
+                print(f"  {DIM}Commit or stash your changes and run 'git pull' yourself.{RESET}\n")
+                return
         except Exception as e:
             print(f"  {YELLOW}⚠️ Git pull failed ({e}); falling back to direct download.{RESET}")
 
-    # Attempt 2: Direct HTTP download from GitHub raw
+    # Attempt 2: Direct HTTP download from GitHub raw.
+    # Everything is downloaded and syntax-checked FIRST; files are only replaced once all succeed,
+    # so a dropped connection can never leave a half-updated install.
     if not updated_ok:
+        downloaded = {}
         try:
             print(f"  {CYAN}⚙️ Downloading updated components from GitHub...{RESET}")
             for f in update_files:
                 url = f"{repo_raw}/{f}"
                 req = urllib.request.Request(url, headers={"User-Agent": "PrivateDesk-CLI"})
-                with urllib.request.urlopen(req, timeout=8.0) as resp:
-                    if resp.status == 200:
-                        content = resp.read()
-                        with open(app_dir / f, "wb") as out_f:
-                            out_f.write(content)
-                        print(f"  {GREEN}✔{RESET} Updated {f}")
-                    else:
+                with urllib.request.urlopen(req, timeout=15.0) as resp:
+                    if resp.status != 200:
                         raise RuntimeError(f"HTTP {resp.status} for {f}")
-            updated_ok = True
+                    content = resp.read()
+                if not content.strip():
+                    raise RuntimeError(f"{f} downloaded empty")
+                if f.endswith(".py"):
+                    compile(content, f, "exec")  # raises SyntaxError on a truncated/corrupt download
+                elif f.endswith(".json"):
+                    json.loads(content.decode("utf-8"))
+                downloaded[f] = content
         except Exception as e:
             print(f"\n{RED}❌ Failed to download update files:{RESET} {e}")
             print(f"{YELLOW}Your existing installation was left intact.{RESET}\n")
+            return
+
+        try:
+            for f, content in downloaded.items():
+                tmp_path = app_dir / f"{f}.new"
+                with open(tmp_path, "wb") as out_f:
+                    out_f.write(content)
+                os.replace(tmp_path, app_dir / f)
+                print(f"  {GREEN}✔{RESET} Updated {f}")
+            updated_ok = True
+        except OSError as e:
+            print(f"\n{RED}❌ Could not write update files:{RESET} {e}")
+            print(f"{YELLOW}Check that you have write access to {app_dir} and try again.{RESET}\n")
             return
 
     # Attempt to update dependencies
@@ -787,13 +826,21 @@ def handle_update(force: bool = False):
     print(f"  {GREEN}●{RESET} Knowledge Vault cache preserved ({vault_count} document(s) safe)")
     print(f"  {CYAN}💡 Run '{YELLOW}/update --info{CYAN}' to see what's new!{RESET}\n")
 
+    if not in_repl or not sys.stdin.isatty():
+        return
+
     # Offer to reload immediately
     try:
         restart = input("Restart PrivateDesk now to load the update? [Y/n]: ").strip().lower()
         if not restart or restart.startswith("y"):
             print(f"{CYAN}Restarting PrivateDesk...{RESET}\n")
+            if os.name == "nt":
+                # os.execv does not replace the process on Windows (the shell prompt would return mid-session).
+                sys.exit(subprocess.call([sys.executable, str(app_dir / "cli.py")]))
             os.execv(sys.executable, [sys.executable, str(app_dir / "cli.py")])
-    except Exception:
+    except (KeyboardInterrupt, EOFError):
+        pass
+    except OSError:
         pass
     print(f"{DIM}Please exit and re-open PrivateDesk to use the updated version.{RESET}\n")
 
@@ -862,6 +909,7 @@ def answer_query(query: str, retriever: DocumentRetriever, engine: LLMEngine):
 def run_repl(retriever: DocumentRetriever, engine: LLMEngine):
     """Runs the interactive REPL loop."""
     setup_autocomplete()
+    start_background_update_check()  # interactive sessions only; one-shot/piped queries never touch the network
     print_banner(retriever)
 
     while True:
@@ -871,7 +919,7 @@ def run_repl(retriever: DocumentRetriever, engine: LLMEngine):
                 continue
 
             # Command Routing
-            cmd = user_input.lower()
+            cmd = " ".join(user_input.lower().split())
             if cmd in ["/exit", "exit", "quit", ":q"]:
                 print(f"{DIM}Goodbye!{RESET}")
                 break
@@ -881,9 +929,9 @@ def run_repl(retriever: DocumentRetriever, engine: LLMEngine):
                 handle_purge(retriever)
             elif cmd in ["/uninstall", "uninstall"]:
                 handle_uninstall()
-            elif cmd in ["/update --info", "/update -i", "/update info", "update info", "update --info"]:
+            elif cmd in ["/update --info", "/update -i", "/update info", "update info", "update --info", "update -i"]:
                 handle_update_info()
-            elif cmd in ["/update --force", "/update -f"]:
+            elif cmd in ["/update --force", "/update -f", "update --force", "update -f"]:
                 handle_update(force=True)
             elif cmd in ["/update", "update"]:
                 handle_update()
@@ -891,7 +939,7 @@ def run_repl(retriever: DocumentRetriever, engine: LLMEngine):
                 print_help()
             elif cmd in ["/docs", "/list", "docs", "list"]:
                 handle_docs(retriever)
-            elif "/upload" in cmd or "/add" in cmd:
+            elif re.search(r"(^|\s)(/upload|/add)(\s|$)", cmd):
                 # Handle /upload anywhere in the input (beginning, middle, or end)
                 file_arg = re.sub(r"(^|\s)(/upload|/add)(\s|$)", " ", user_input, flags=re.IGNORECASE).strip()
                 handle_upload(file_arg, retriever)
@@ -903,15 +951,19 @@ def run_repl(retriever: DocumentRetriever, engine: LLMEngine):
                 # Check if user directly dragged/pasted a valid file or folder path without typing /upload
                 else:
                     candidate_path = clean_finder_path(user_input)
+                    looks_like_path = bool(
+                        user_input.startswith(("~/", "~\\"))
+                        or re.match(r"^[a-zA-Z]:[\\/]", candidate_path)
+                        or candidate_path.startswith(("/Users/", "/home/", "/var/", "/tmp/", "/Volumes/", "/opt/", "/mnt/"))
+                        or (user_input.startswith("/") and ("/" in user_input[1:] or "\\" in user_input))
+                    )
                     if candidate_path and Path(candidate_path).exists():
                         print(f"{CYAN}📁 Detected input path:{RESET} {candidate_path}")
                         handle_upload(candidate_path, retriever)
+                    elif looks_like_path:
+                        print(f"{RED}❌ Path not found:{RESET} {candidate_path or user_input}")
                     elif user_input.startswith("/"):
-                        # Check if it looks like an intended filesystem path that couldn't be found
-                        if user_input.startswith(("/Users", "/home", "/var", "/tmp", "~", "C:", "D:")) or "/" in user_input[1:] or "\\" in user_input:
-                            print(f"{RED}❌ Path not found:{RESET} {user_input}")
-                        else:
-                            print(f"{YELLOW}Unknown command:{RESET} {user_input}. Type {CYAN}/help{RESET} for options.")
+                        print(f"{YELLOW}Unknown command:{RESET} {user_input}. Type {CYAN}/help{RESET} for options.")
                     else:
                         answer_query(user_input, retriever, engine)
 
@@ -921,9 +973,6 @@ def run_repl(retriever: DocumentRetriever, engine: LLMEngine):
 
 
 def main():
-    # Start non-blocking background check for updates immediately
-    start_background_update_check()
-
     # Fast-path command-line flags that don't need DocumentRetriever or LLMEngine
     if len(sys.argv) > 1:
         first_arg = sys.argv[1]
@@ -937,9 +986,9 @@ def main():
             if len(sys.argv) > 2 and sys.argv[2] in ["--info", "-i", "info"]:
                 handle_update_info()
             elif len(sys.argv) > 2 and sys.argv[2] in ["--force", "-f", "force"]:
-                handle_update(force=True)
+                handle_update(force=True, in_repl=False)
             else:
-                handle_update()
+                handle_update(in_repl=False)
             sys.exit(0)
         elif first_arg in ["--uninstall"]:
             handle_uninstall()

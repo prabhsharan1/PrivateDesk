@@ -171,3 +171,32 @@ jobs:
           cat "$GITHUB_WORKSPACE/uninstall.sh" | bash
           test ! -e "$HOME/.privatedesk" || { echo "::error::.privatedesk still exists after uninstall"; exit 1; }
           test ! -e "$HOME/.local/bin/privatedesk" || { echo "::error::launcher still exists after uninstall"; exit 1; }
+
+  # ---------------------------------------------------------------------------
+  # Python compatibility: the installers accept Python 3.9+, so actually import
+  # and run the app on the oldest and newest supported interpreters.
+  # (py_compile alone can't catch runtime errors like `str | None` on 3.9.)
+  # ---------------------------------------------------------------------------
+  python-compat:
+    name: Python ${{ matrix.python }} compatibility
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install dependencies
+        run: python -m pip install --quiet -r requirements.txt
+      - name: Import every module and run the CLI
+        env:
+          HOME: ${{ runner.temp }}
+          PRIVATEDESK_NO_UPDATE_CHECK: "1"
+        run: |
+          python -c "import cli, parser, retriever, storage, llm_engine; print('imports ok')"
+          python cli.py --version
+          python cli.py --docs
+          python test_suite.py
